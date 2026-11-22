@@ -166,6 +166,15 @@
           <p id="covText" class="text-xs text-appleInk/85 leading-relaxed"></p>
         </div>
 
+        <!-- Дублирование другими маршрутами -->
+        <div id="dupCard" class="hidden rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 sm:p-5 space-y-3">
+          <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold uppercase tracking-wide text-appleMuted">Дублирование другими маршрутами</span><span id="dupPill" class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border"></span></div>
+          <div class="flex items-end gap-3"><div id="dupVal" class="text-xl font-semibold tabular-nums"></div><span id="dupSub" class="text-xs text-appleMuted pb-0.5"></span></div>
+          <div class="w-full h-2 rounded-full bg-black/[0.06] overflow-hidden"><div id="dupBar" class="h-full rounded-full transition-all duration-200"></div></div>
+          <p id="dupText" class="text-xs text-appleInk/85 leading-relaxed"></p>
+          <button type="button" id="dupRetry" class="hidden text-xs font-medium text-appleBlue hover:underline">Повторить запрос</button>
+        </div>
+
 
       </section>
     </div>
@@ -209,7 +218,7 @@
     const f2 = v => Number(v).toFixed(2);
     // Скрытые настройки формулы: равные веса, ΔL max = 1, K min = 1, K max = 2
     const W = 1 / 3, DL = 1, KMIN = 1, KMAX = 2, COMFORT = 0.60, SCALE = 1.2;
-    const DEFAULT = { routeName: '', mode: '', peak: 0, off: 0, d: 0, k: 1, kRaw: 1, kBasis: 'manual', cov: null, routeStops: null };
+    const DEFAULT = { routeName: '', mode: '', peak: 0, off: 0, d: 0, k: 1, kRaw: 1, kBasis: 'manual', cov: null, dup: null, dupSt: '', dupMsg: '', routeStops: null };
     const state = { ...DEFAULT };
     let covShow = true, covDrawn = null;   // показывать ли пятна охвата на карте; какой охват сейчас нарисован
     // Рисует круги 400 м вокруг остановок. Полупрозрачность показывает дублирование: на перекрытиях цвет темнее
@@ -253,7 +262,7 @@
     }
     CFG.forEach(c => {
       const n = $('n_' + c.key), r = $('r_' + c.key), lo = c.from(c.min), hi = c.from(c.max);
-      const apply = p => { state[c.key] = clip(c.from(p), lo, hi); if (c.key === 'k') { state.kRaw = state.k; state.kBasis = 'manual'; state.cov = null; } render(); };
+      const apply = p => { state[c.key] = clip(c.from(p), lo, hi); if (c.key === 'k') { state.kRaw = state.k; state.kBasis = 'manual'; state.cov = null; dupReset(); } render(); };
       r.addEventListener('input', () => { apply(parseFloat(r.value)); n.value = shown(c); });
       n.addEventListener('input', () => { const v = parseFloat(n.value); if (isNaN(v)) return; apply(v); r.value = c.to(state[c.key]); });
       n.addEventListener('change', () => { n.value = shown(c); });
@@ -285,19 +294,29 @@
       const E = state.cov ? state.cov.E : null;
       const J = E === null ? 0 : clip((E - 0.5) / 0.3, 0, 1);       // 0 при E ≤ 50% (дублирование), 1 при E ≥ 80%
       const S3 = S3raw * (1 - 0.6 * J);
-      const mean = 0.4 * S1 + 0.4 * S2 + 0.2 * S3;
+      // Дублирование другими маршрутами (по базе маршрутов). Штрафуется только при невысокой загрузке: если салон заполнен,
+      // параллельные линии нужны (в час пик они делят поток), и дублирование не вредит. Пик учитывается с весом 0.75.
+      const dp = state.dup;
+      const avgLoad = Math.max((peak + off) / 2, peak * 0.75);
+      const relief = clip((0.7 - avgLoad) / 0.3, 0, 1);              // 1 при загрузке ≤ 40%, 0 при ≥ 70%
+      // Коэффициент дублирования D = наибольшая доля трассы, совпадающая с одним другим маршрутом (dp.pair). Откалиброван по базе Минска
+      // (587 маршрутов): медиана 0.67, p75 0.88, p90 1.0. Рядом с каждым маршрутом в среднем идёт около 7 других, поэтому «хоть кто-то рядом» и кратность
+      // совпадений не различают маршруты (у 2/3 они у потолка). Штраф: 0 при D ≤ 0.70 (общий коридор — норма для плотной сети), 1 при D = 1.0 (полный двойник)
+      const S4 = dp ? relief * clip((dp.pair - 0.70) / 0.30, 0, 1) : 0;
+      const S3g = 1 - (1 - S3) * (1 - S4);                           // блок «трасса»: извилистость и дублирование
+      const mean = 0.4 * S1 + 0.4 * S2 + 0.2 * S3g;
       // Извилистость нередко оправдана охватом жилых районов, поэтому в «худший блок» она входит с весом 0.5:
       // сама по себе (при нормальных загрузке и регулярности) она не может дать красный результат «Нужна смена маршрута»
-      const G = 0.5 * S3;
+      const G = 0.5 * S3g;
       const healthy = S1 < 0.25 && S2 < 0.25;   // загрузка и регулярность в порядке
       const I = 0.5 * Math.max(S1, S2, G) + 0.5 * mean;
-      const t1 = S1, t2 = S2, t3 = S3;
+      const t1 = S1, t2 = S2, t3 = S3g;
       const names = ['загрузка салона', 'регулярность движения', 'геометрия трассы'];
       const main = [S1, S2, G].indexOf(Math.max(S1, S2, G));
       const why = [
         over >= under && over >= imb ? 'в час пик салон перегружен' : under >= imb ? 'салон в среднем почти пустой' : 'сильный перекос между пиком и межпиком',
         'много рейсов выбивается из расписания',
-        `трасса заметно длиннее ${kBase}`
+        S4 > S3 && dp ? `трасса дублирует другие маршруты (в среднем рядом идёт ${dp.avgM.toFixed(1).replace('.', ',')} маршр.${dp.top.length ? ', ближе всего ' + dp.top[0].name + ': ' + pct(dp.pair) + ' длины' : ''}), а загрузка невысокая` : `трасса заметно длиннее ${kBase}`
       ][main];
 
       $('routeBadge').textContent = state.routeName.trim() ? 'Маршрут ' + state.routeName.trim() : '-';
@@ -330,9 +349,9 @@
         else if (I < 0.5) { bar.style.background = '#FF9500'; setPill($('idxPill'), pill.o, 'Точечная корректировка'); }
         else { bar.style.background = '#FF3B30'; setPill($('idxPill'), pill.r, 'Нужна смена маршрута'); }
         $('idxText').textContent = I < 0.25
-          ? `Все три блока в пределах нормы (загрузка ${pct(S1)}, регулярность ${pct(S2)}, трасса ${pct(S3)}). Маршрут можно оставить без изменений.`
-          : `Главный фактор: ${names[main]} — ${why}. Штрафы блоков: загрузка ${pct(S1)}, регулярность ${pct(S2)}, трасса ${pct(S3)}${J > 0 ? ' (с учётом охвата)' : ''}.`
-            + (main === 2 && healthy && !(E !== null && E < 0.5) ? ' Загрузка и регулярность в норме, поэтому извилистость, скорее всего, оправдана: обход собирает пассажиров из жилых районов. Это повод проверить заезды, а не менять маршрут.' : '');
+          ? `Все три блока в пределах нормы (загрузка ${pct(S1)}, регулярность ${pct(S2)}, трасса ${pct(S3g)}). Маршрут можно оставить без изменений.`
+          : `Главный фактор: ${names[main]} — ${why}. Штрафы блоков: загрузка ${pct(S1)}, регулярность ${pct(S2)}, трасса ${pct(S3g)}${J > 0 ? ' (с учётом охвата)' : ''}${S4 > 0.05 ? ', в том числе дублирование ' + pct(S4) : ''}.`
+            + (main === 2 && healthy && S3 >= S4 && !(E !== null && E < 0.5) ? ' Загрузка и регулярность в норме, поэтому извилистость, скорее всего, оправдана: обход собирает пассажиров из жилых районов. Это повод проверить заезды, а не менять маршрут.' : '');
 
         const items = [];
         const avg = (peak + off) / 2, mode = state.mode;
@@ -356,7 +375,7 @@
               : `Перегруз небольшой, достаточно добавить рейсы в самые нагруженные 1–2 часа, вместимость менять не нужно.`,
             'Если переполнен только один участок, а не вся линия, дешевле ввести укороченные рейсы на нём, чем наращивать выпуск по всей трассе.',
             ...(d > PR.dN ? [`Перегруз удлиняет посадку и сам даёт сбои (сейчас ${pct(d)} интервалов). После разгрузки замерьте регулярность заново: часть сбоев уйдёт сама.`] : [])
-          ], effect(s1Without('over'), S2, S3))]);
+          ], effect(s1Without('over'), S2, S3g))]);
         }
 
         if (under > 0.1) {
@@ -371,7 +390,7 @@
               ? 'При загрузке ниже 25% дело уже не в интервале, а в востребованности линии. Сверьте остановки с жилой застройкой и пересадочными узлами: возможно, маршрут стоит объединить с параллельным или сократить до загруженного участка.'
               : `Вместо сокращения числа рейсов можно перейти на ${smallVeh}: интервал сохранится, а затраты упадут.`,
             ...(k > PR.kN ? [`Обход длиннее ${kBase} на ${kpct(k)} делает поездку дольше, чем нужно, и часть пассажиров выбирает другие маршруты. Спрямление (см. ниже) может вернуть спрос.`] : [])
-          ], effect(s1Without('under'), S2, S3))]);
+          ], effect(s1Without('under'), S2, S3g))]);
         }
 
         if (imb > 0.1) {
@@ -383,7 +402,7 @@
           ] : [
             `Днём загрузка выше, чем в пик, а для городского маршрута это нетипично. Так бывает у линий к рынкам, больницам и вокзалам. Сначала проверьте замеры.`,
             'Если данные верны, сдвиньте плотный график с утреннего и вечернего пика на дневные часы.'
-          ], effect(s1Without('imb'), S2, S3))]);
+          ], effect(s1Without('imb'), S2, S3g))]);
         }
 
         if (S2 > 0.1) {
@@ -395,7 +414,7 @@
           if (d < 0.25) b2.push('Ввести диспетчерское удержание на 1–2 контрольных пунктах, чтобы выравнивать интервалы, и заложить на конечной запас на отстой около 10–15% от времени рейса.');
           else if (d < 0.5) b2.push('Пересчитать время рейса по GPS и брать не среднее, а 85-й процентиль: расписание по среднему заведомо выполняется лишь примерно в половине рейсов.', 'Найти по GPS участки, где теряется больше всего времени, и добиться там приоритета на светофорах или выделенной полосы.');
           else b2.push('При такой доле сбоев расписание не соответствует реальности: пересчитать время оборота по GPS и перестроить график целиком.', 'Проверить укомплектованность водителями и техническое состояние парка: сход машин с линии даёт такие же симптомы.', 'Если рейс очень длинный, разделить его на два.');
-          items.push([S2, `Нарушение регулярности (сбои у ${Math.round(d * 100)}% интервалов)`, withEff(b2, effect(S1, 0, S3))]);
+          items.push([S2, `Нарушение регулярности (сбои у ${Math.round(d * 100)}% интервалов)`, withEff(b2, effect(S1, 0, S3g))]);
         }
 
         if (S3 > 0.1) {
@@ -426,8 +445,19 @@
               b3.push('Найдите на карте петли и заезды (оранжевая линия или ваша трасса) и замерьте посадку на каждом: заезд оправдан, только если даёт заметный пассажиропоток.', 'Оставьте основной коридор по магистрали, а удалённые кварталы свяжите отдельным подвозящим маршрутом.');
               if (k > 1.5) b3.push('Для такой длины хорошо работает экспресс-вариант с меньшим числом остановок или деление маршрута на два.');
             }
-            items.push([0.5 * S3, `Извилистая трасса (длиннее ${kBase} на ${Math.round((k - 1) * 100)}%)`, withEff(b3, effect(S1, S2, 0))]);
+            items.push([0.5 * S3, `Извилистая трасса (длиннее ${kBase} на ${Math.round((k - 1) * 100)}%)`, withEff(b3, effect(S1, S2, S4))]);
           }
+        }
+
+        if (S4 > 0.1 && dp) {
+          const names3 = dp.top.slice(0, 3).map(t => `${t.name} (${pct(t.share)} длины)`).join(', ');
+          const b4 = [
+            `В пределах ${dp.R} м идут другие маршруты, в среднем ${dp.avgM.toFixed(1).replace('.', ',')} одновременно; больше всего совпадает с ${names3}. Средняя загрузка маршрута всего ${pct(avg)}, поэтому пассажиры делятся между параллельными линиями и ни одна не заполняется.`,
+            `Сравните загрузку с ближайшим параллельным маршрутом (${dp.top[0].name}): если оба малозагружены, оставьте основным один, а второй сократите до недублируемого участка или объедините с первым.`,
+            'Можно разделить функции: на общем участке в межпик ходит один маршрут, а в час пик оба. Интервал на участке в пик не вырастет, а выпуск в межпик сократится.',
+            'Проверьте остановки: если на общем участке они у маршрутов разные, дублируется улица, но не охват района, и отменять маршрут рано.'
+          ];
+          items.push([0.5 * S4, `Дублирование другими маршрутами (в среднем рядом ${dp.avgM.toFixed(1).replace('.', ',')} маршр.)`, withEff(b4, effect(S1, S2, S3))]);
         }
         items.sort((x, y) => y[0] - x[0]);
 
@@ -476,6 +506,35 @@
         else if (cv.E >= 0.5) { bar.style.background = '#5AC8FA'; setPill($('covPill'), pill.b, 'Частичный повтор'); $('covText').textContent = 'Часть трассы повторно проходит по уже охваченной территории. ' + (k > PR.kN ? 'Штраф за извилистость снижен лишь частично.' : ''); }
         else { bar.style.background = '#FF9500'; setPill($('covPill'), pill.o, 'Дублирование'); $('covText').textContent = 'Трасса много петляет по одной и той же территории: заезды перекрывают друг друга. ' + (k > PR.kN ? 'Извилистость охватом не оправдана, штраф не снижен.' : 'Стоит проверить, нужны ли все заезды.'); }
       } else cc.classList.add('hidden');
+      // Дублирование другими маршрутами
+      const dcard = $('dupCard');
+      if (dp) {
+        dcard.classList.remove('hidden');
+        const avgTxt = dp.avgM.toFixed(1).replace('.', ',');
+        $('dupVal').textContent = pct(dp.pair);
+        $('dupSub').textContent = dp.top.length
+          ? `длины совпадает с одним маршрутом (${dp.top[0].name}) · рядом хоть с кем-то ${pct(dp.share)} · в среднем рядом ${avgTxt} маршр.`
+          : 'ни один маршрут не идёт рядом';
+        const db = $('dupBar'); db.style.width = clip(dp.pair * 100, 0, 100) + '%';
+        if (dp.pair < 0.5) { db.style.background = '#34C759'; setPill($('dupPill'), pill.g, 'В основном уникальная'); }
+        else if (dp.pair <= 0.7) { db.style.background = '#5AC8FA'; setPill($('dupPill'), pill.b, 'Общий коридор'); }
+        else { db.style.background = '#FF9500'; setPill($('dupPill'), pill.o, 'Есть маршрут-двойник'); }
+        const lst = dp.top.length ? 'Чаще всего совпадает с: ' + dp.top.map(t => `${t.name} (${pct(t.share)})`).join(', ') + '. ' : '';
+        const why4 = S4 > 0 ? `Загрузка невысокая (в среднем ${pct((peak + off) / 2)}), поэтому дублирование входит в индекс: штраф ${pct(S4)} в блоке «трасса».`
+          : dp.pair > 0.7 ? 'Загрузка высокая, параллельные линии делят поток, поэтому штраф за дублирование не начисляется.' : 'Совпадение с одним маршрутом не выше 70%, это обычный общий коридор, штрафа нет.';
+        $('dupText').textContent = lst + why4 + ` Коэффициент дублирования D — наибольшая доля трассы, совпадающая с одним другим маршрутом (параллельный ход длиннее ~${DUP.minRun * DUP.step} м в пределах ${dp.R} м). В плотной сети рядом всегда кто-то идёт, поэтому штраф начинается при D выше 70% и достигает максимума при 100%.`;
+        $('dupRetry').classList.add('hidden');
+      } else if (state.dupSt === 'load' || state.dupSt === 'err') {
+        const ld = state.dupSt === 'load';
+        dcard.classList.remove('hidden');
+        $('dupVal').textContent = ld ? '…' : '—';
+        $('dupSub').textContent = '';
+        $('dupBar').style.width = ld ? '35%' : '0%'; $('dupBar').style.background = '#5AC8FA';
+        setPill($('dupPill'), ld ? pill.b : 'bg-black/[0.04] text-appleMuted border-appleBorder', ld ? 'Считаю…' : 'Нет данных');
+        $('dupText').textContent = ld ? 'Запрашиваю из OpenStreetMap маршруты, которые проходят рядом с этой трассой. Локальной базы маршрутов (routes-minsk.js) рядом с файлом нет, поэтому это может занять до минуты. Пока дублирование в индекс не входит.'
+          : 'Не удалось оценить дублирование: ' + (state.dupMsg || 'нет ответа') + '. В индекс оно не входит. Положите рядом с файлом routes-minsk.js или повторите запрос.';
+        $('dupRetry').classList.toggle('hidden', ld);
+      } else { dcard.classList.add('hidden'); $('dupRetry').classList.add('hidden'); }
       drawCov();
       $('kVal').textContent = kpct(k);
     }
@@ -508,6 +567,103 @@
       const area = set.size * cell * cell / 1e6, sum = pts.length * Math.PI * (R / 1000) ** 2;
       return { E: Math.min(1, area / sum), area, sum, n: pts.length, kind, pts, lenM };
     }
+    // ---- Дублирование другими маршрутами (по локальной базе маршрутов города) ----
+    // Трасса режется на пробы через DUP.step м. Проба «совпала» с другим маршрутом, если его трасса проходит в пределах DUP.R м.
+    // Совпадением считается только протяжённый параллельный ход (не меньше DUP.minRun проб подряд, разрыв в одну пробу закрывается),
+    // иначе каждое пересечение улиц давало бы ложное «дублирование». Свои же направления (тот же тип и номер) не считаются.
+    // В расчёт индекса идёт pair — наибольшая доля трассы, совпадающая с одним маршрутом; Q (средняя кратность / 3) оставлен только для справки.
+    const DUP = { R: 40, step: 50, idxStep: 25, minRun: 4 };
+    let dupIdx = null, dupDb = null;
+    const routeKey = e => e.tags.route + '|' + String(e.tags.ref).trim().toLowerCase();
+    // Точки вдоль ломаной через каждые step метров (с интерполяцией внутри длинных отрезков)
+    function densify(c, step) {
+      const out = [c[0]]; let acc = 0;
+      for (let i = 1; i < c.length; i++) {
+        const a = c[i - 1], b = c[i], d = hav(a, b); if (!(d > 0)) continue;
+        let t = step - acc;
+        while (t <= d) { const f = t / d; out.push({ lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f }); t += step; }
+        acc = d - (t - step);
+      }
+      return out;
+    }
+    // Пространственный индекс маршрутов: ячейки размером DUP.R, в них точки (x, y, номер маршрута). Для локальной базы строится один раз на город
+    function makeDupIdx(list, lat0) {
+      const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540, cell = DUP.R;
+      const keys = [], names = [], ids = new Map(), grid = new Map();
+      list.forEach(e => {
+        if (!e.tags || !TYPES[e.tags.route] || !e.tags.ref) return;
+        const key = routeKey(e); let n = ids.get(key);
+        if (n === undefined) { n = keys.length; ids.set(key, n); keys.push(key); names.push(TYPES[e.tags.route][1] + String(e.tags.ref).trim()); }
+        const chains = e.c && e.c.length ? e.c : (e.s && e.s.length > 1 ? [e.s] : []);
+        chains.forEach(c => { if (c.length < 2) return; densify(c.map(q => ({ lat: q[0], lng: q[1] })), DUP.idxStep).forEach(q => {
+          const x = q.lng * kx, y = q.lat * ky, gk = Math.floor(x / cell) + ',' + Math.floor(y / cell);
+          let g = grid.get(gk); if (!g) grid.set(gk, g = []); g.push(x, y, n);
+        }); });
+      });
+      return { grid, keys, names, kx, ky, cell };
+    }
+    function dupIndex() {
+      const id = Object.keys(CITIES).find(k => CITIES[k] === city), db = window.ROUTES_DB && window.ROUTES_DB[id];
+      if (!db || !db.routes || !db.routes.length) return null;
+      if (dupIdx && dupDb === db) return dupIdx;
+      dupDb = db; return dupIdx = makeDupIdx(db.routes, city.center[0]);
+    }
+    // Нет локальной базы: запрашиваем из OpenStreetMap только маршруты, проходящие рядом с трассой, и считаем по ним
+    let dupTok = 0, dupCtx = null;
+    function dupReset() { dupTok++; state.dup = null; state.dupSt = ''; state.dupMsg = ''; }
+    async function fetchDup(chain, selfKey) {
+      const tok = dupTok; dupCtx = { chain, selfKey };
+      state.dup = null; state.dupSt = 'load'; state.dupMsg = ''; render();
+      try {
+        const pts = densify(chain, 200).slice(0, 150);
+        const q = `[out:json][timeout:60];relation["route"~"^(bus|trolleybus|tram)$"](around:${DUP.R + 20},${pts.map(q => q.lat.toFixed(5) + ',' + q.lng.toFixed(5)).join(',')});out geom;`;
+        const j = await overpass(q);
+        if (tok !== dupTok) return;
+        const list = (j.elements || []).filter(e => e.type === 'relation' && e.tags && e.tags.ref && TYPES[e.tags.route]).map(e => {
+          const c = [], seen = new Set();
+          (e.members || []).forEach(m => { if (m.type === 'way' && m.geometry && !seen.has(m.ref) && !/^(platform|stop)/.test(m.role || '')) { seen.add(m.ref); const g = m.geometry.filter(Boolean).map(p => [p.lat, p.lon]); if (g.length > 1) c.push(g); } });
+          return { tags: e.tags, c };
+        });
+        const d = duplication(chain, selfKey, makeDupIdx(list, chain[0].lat));
+        state.dup = d; state.dupSt = d ? 'ok' : 'err'; state.dupMsg = d ? '' : 'Маршрут слишком короткий для оценки.';
+      } catch (e) { if (tok !== dupTok) return; state.dupSt = 'err'; state.dupMsg = String(e.message || e); }
+      render();
+    }
+    function duplication(chain, selfKey, ixo) {
+      const ix = ixo || dupIndex(); if (!ix || !chain || chain.length < 2) return null;
+      const pts = densify(chain, DUP.step), n = pts.length; if (n < DUP.minRun + 1) return null;
+      const R2 = DUP.R * DUP.R, hits = new Map();
+      pts.forEach((p, i) => {
+        const x = p.lng * ix.kx, y = p.lat * ix.ky, cx = Math.floor(x / ix.cell), cy = Math.floor(y / ix.cell), seen = new Set();
+        for (let u = -1; u <= 1; u++) for (let v = -1; v <= 1; v++) {
+          const a = ix.grid.get((cx + u) + ',' + (cy + v)); if (!a) continue;
+          for (let j = 0; j < a.length; j += 3) {
+            const id = a[j + 2]; if (seen.has(id)) continue;
+            const dx = a[j] - x, dy = a[j + 1] - y; if (dx * dx + dy * dy <= R2) seen.add(id);
+          }
+        }
+        seen.forEach(id => { if (selfKey && ix.keys[id] === selfKey) return; let h = hits.get(id); if (!h) hits.set(id, h = new Uint8Array(n)); h[i] = 1; });
+      });
+      const m = new Uint8Array(n), per = [];
+      hits.forEach((h, id) => {
+        const f = h.slice(); for (let i = 1; i < n - 1; i++) if (!h[i] && h[i - 1] && h[i + 1]) f[i] = 1;   // разрыв в одну пробу
+        let cnt = 0, i = 0;
+        while (i < n) {
+          if (!f[i]) { i++; continue; }
+          let j = i; while (j < n && f[j]) j++;
+          if (j - i >= DUP.minRun) for (let t = i; t < j; t++) { m[t]++; cnt++; }
+          i = j;
+        }
+        if (cnt > 0) per.push([id, cnt]);
+      });
+      let any = 0, sum = 0; for (let i = 0; i < n; i++) { if (m[i] > 0) any++; sum += Math.min(m[i], 3); }
+      per.sort((a, b) => b[1] - a[1]);
+      let tot = 0; for (let i = 0; i < n; i++) tot += m[i];
+      const top = per.slice(0, 5).map(([id, c]) => ({ name: ix.names[id], share: c / n }));
+      // share — доля длины, рядом с которой идёт хоть кто-то (в плотной сети почти всегда ≈ 100%, поэтому как главный показатель не годится);
+      // pair — наибольшая доля длины, совпадающая с ОДНИМ другим маршрутом (настоящий «двойник»); avgM — сколько маршрутов в среднем идёт рядом одновременно
+      return { Q: sum / (3 * n), share: any / n, alone: 1 - any / n, pair: top.length ? top[0].share : 0, avgM: tot / n, n: per.length, R: DUP.R, lenM: (n - 1) * DUP.step, top };
+    }
     const map = L.map('map', { attributionControl: false }).setView([53.9006, 27.5590], 12);
     L.control.attribution({ prefix: false }).addTo(map);
     const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' });
@@ -535,8 +691,8 @@
       ['n_k', 'r_k'].forEach(id => { $(id).disabled = lock; $(id).classList.toggle('opacity-50', lock); $(id).classList.toggle('cursor-not-allowed', lock); });
       kHint.textContent = lock ? 'Значение рассчитано по маршруту на карте и заблокировано. Чтобы изменить его вручную, очистите карту.' : kHintDefault;
     }
-    function setK(K, basis, cov) {
-      state.kBasis = basis || 'manual'; state.cov = cov || null;
+    function setK(K, basis, cov, dup) {
+      dupTok++; state.kBasis = basis || 'manual'; state.cov = cov || null; state.dup = dup || null; state.dupSt = dup ? 'ok' : ''; state.dupMsg = '';
       state.kRaw = K;
       state.k = Number(clip(K, 1, 2).toFixed(2));
       $('n_k').value = Math.round((state.k - 1) * 100); $('r_k').value = (state.k - 1) * 100;
@@ -548,7 +704,7 @@
       rawLine.setLatLngs(P);
       clearTimeout(timer); seq++;
       if (P.length < 2) {
-        roadLine.setLatLngs([]); state.cov = null;
+        roadLine.setLatLngs([]); state.cov = null; dupReset();
         $('mapStat').textContent = `Точек: ${P.length} — поставьте минимум две, чтобы рассчитать K.`;
         render(); return;
       }
@@ -569,17 +725,19 @@
       if (len === null) { len = 0; for (let j = 0; j < P.length - 1; j++) len += hav(P[j], P[j + 1]); roadLine.setLatLngs([]); }
       else { roadLine.setLatLngs(coords); rawLine.setLatLngs([]); }
       // База сравнения: кратчайший путь по улицам между первой и последней точкой (для двух точек маршрут и есть кратчайший путь)
-      let Ls = null, cov = null;
+      let Ls = null, cov = null, dup = null;
       if (coords) {
         Ls = P.length === 2 ? len : await shortestPath(P[0], P[P.length - 1]);
         if (my !== seq) return;
         cov = coverage(samplePath(coords.map(c => ({ lat: c[0], lng: c[1] })), 500), len, 'path');
+        dup = duplication(coords.map(c => ({ lat: c[0], lng: c[1] })), null);
       }
       const basis = Ls ? 'network' : 'straight', base = Ls || dir;
       if (coords && !Ls) note += ' (кратчайший путь по улицам посчитать не удалось, сравнение с прямой)';
       const K = base > 1 ? Math.max(1, len / base) : KMAX;
-      setK(K, basis, cov);
-      $('mapStat').textContent = `Точек: ${P.length} · длина по дорогам ${(len / 1000).toFixed(2)} км · ${Ls ? 'кратчайший путь' : 'по прямой'} ${(base / 1000).toFixed(2)} км · извилистость ${Math.round((K - 1) * 100)}%` + (cov ? ` · охват ${Math.round(cov.E * 100)}%` : '') + (K > 2 ? ' (в расчёте не более 100%)' : '') + note;
+      setK(K, basis, cov, dup);
+      if (coords && !dup && !dupIndex()) fetchDup(coords.map(c => ({ lat: c[0], lng: c[1] })), null);
+      $('mapStat').textContent = `Точек: ${P.length} · длина по дорогам ${(len / 1000).toFixed(2)} км · ${Ls ? 'кратчайший путь' : 'по прямой'} ${(base / 1000).toFixed(2)} км · извилистость ${Math.round((K - 1) * 100)}%` + (cov ? ` · охват ${Math.round(cov.E * 100)}%` : '') + (dup ? ` · дублирование: макс. совпадение с одним маршрутом ${Math.round(dup.pair * 100)}%` : '') + (K > 2 ? ' (в расчёте не более 100%)' : '') + note;
       render();
     }
     map.on('click', e => {
@@ -590,7 +748,8 @@
       m.on('click', () => { map.removeLayer(m); markers = markers.filter(x => x !== m); redraw(); });
       markers.push(m); redraw();
     });
-    const wipe = () => { state.mode = ''; state.cov = null; state.kBasis = 'manual'; state.routeStops = null; markers.forEach(m => map.removeLayer(m)); markers = []; imported.clearLayers(); importedActive = false; redraw(); };
+    $('dupRetry').addEventListener('click', () => { if (dupCtx) fetchDup(dupCtx.chain, dupCtx.selfKey); });
+    const wipe = () => { state.mode = ''; state.cov = null; dupReset(); state.kBasis = 'manual'; state.routeStops = null; markers.forEach(m => map.removeLayer(m)); markers = []; imported.clearLayers(); importedActive = false; redraw(); };
     $('undoBtn').onclick = () => { const m = markers.pop(); if (m) map.removeLayer(m); redraw(); };
     $('clearBtn').onclick = wipe;
     $('resetBtn').onclick = () => { Object.assign(state, DEFAULT); sync(); $('importStat').textContent = ''; loadSeq++; $('ds').classList.add('hidden'); $('rsLbl').textContent = 'Выберите маршрут'; $('rsLbl').classList.add('text-appleMuted'); wipe(); };
@@ -835,6 +994,7 @@
         const basis = Ls ? 'network' : 'straight', base = Ls || dir;
         const K = base > 1 ? Math.max(1, len / base) : KMAX;
         const cov = coverage(stops.length >= 3 ? stops : samplePath(main, 500), lenFull, stops.length >= 3 ? 'stops' : 'path');
+        const dupKey = e.tags && e.tags.ref ? routeKey(e) : null, dup = duplication(main, dupKey);
         markers.forEach(m => map.removeLayer(m)); markers = []; roadLine.setLatLngs([]); rawLine.setLatLngs([]); clearTimeout(timer); seq++;
         imported.clearLayers();
         chains.forEach((c, i) => L.polyline(c, i === 0 ? { color: '#FF9500', weight: 5, opacity: .95 } : { color: '#FF9500', weight: 3, opacity: .4, dashArray: '6 8' }).addTo(imported));
@@ -842,9 +1002,10 @@
         [[A, 'Начало (для расчёта K)'], [B, 'Конец (для расчёта K)']].forEach(([q, t]) => L.circleMarker(q, { radius: 7, color: '#fff', weight: 2, fillColor: '#1D1D1F', fillOpacity: 1 }).bindTooltip(t).addTo(imported));
         map.fitBounds(L.latLngBounds(chains.flat()), { padding: [30, 30] });
         state.routeName = label(e); state.mode = (e.tags && e.tags.route) || ''; state.routeStops = stops.length; $('routeName').value = state.routeName;
-        importedActive = true; lockK(); setK(K, basis, cov); render();
+        importedActive = true; lockK(); setK(K, basis, cov, dup); render();
+        if (!dup && !dupIndex()) fetchDup(main, dupKey);
         $('mapStat').textContent = '';
-        st.textContent = `Длина ${(len / 1000).toFixed(1)} км · ${Ls ? 'кратчайший путь по улицам' : 'по прямой'} ${(base / 1000).toFixed(1)} км · извилистость ${Math.round((K - 1) * 100)}%` + (cov ? ` · охват ${Math.round(cov.E * 100)}%` : '') + (K > 2 ? ' (в расчёте не более 100%)' : '') + (!Ls ? (isTram ? ' · для трамвая кратчайший путь по улицам не считается, сравнение с прямой' : ' · кратчайший путь по улицам посчитать не удалось, сравнение с прямой') : '') + note;
+        st.textContent = `Длина ${(len / 1000).toFixed(1)} км · ${Ls ? 'кратчайший путь по улицам' : 'по прямой'} ${(base / 1000).toFixed(1)} км · извилистость ${Math.round((K - 1) * 100)}%` + (cov ? ` · охват ${Math.round(cov.E * 100)}%` : '') + (dup ? ` · дублирование: макс. совпадение с одним маршрутом ${Math.round(dup.pair * 100)}%` : '') + (K > 2 ? ' (в расчёте не более 100%)' : '') + (!Ls ? (isTram ? ' · для трамвая кратчайший путь по улицам не считается, сравнение с прямой' : ' · кратчайший путь по улицам посчитать не удалось, сравнение с прямой') : '') + note;
       } catch (err) { if (my === loadSeq) st.textContent = 'Не удалось загрузить маршрут (' + err.message + '). Выберите его ещё раз — запрос повторится.'; }
       finally { clearInterval(tick); }
     }
@@ -860,7 +1021,7 @@
     const FMN = { bus: 'Автобусы', trolleybus: 'Троллейбусы', tram: 'Трамваи' };
     const FL = [['fL','Длина маршрута в одну сторону, км',0,0,100],['fN','Остановок в одном направлении',0,0,80],['fV','Эксплуатационная скорость, км/ч',20,0,60],['fT','Простой на остановке, с',25,0,120],['fTau','Стоянка на конечной, мин (можно 0)',0,0,30,1],['fG','Допустимая наполняемость в пик, % (необязательно)',100,0,130,1],['fH','Максимальный интервал, мин',0,0,60]];
     const nr = () => ({ m: '', c: 0, a: 0, b: 0 });
-    const fS = { mode: 'bus', user: false, open: false, mOpen: null, calc: false, off: { bus: new Set(), trolleybus: new Set(), tram: new Set() }, rows: { bus: [nr()], trolleybus: [nr()], tram: [nr()] } };
+    const fS = { mode: 'bus', user: false, open: false, mOpen: null, calc: false, off: { bus: new Set(), trolleybus: new Set(), tram: new Set() }, rows: { bus: [nr()], trolleybus: [nr()], tram: [nr()] }, cnt: { bus: {}, trolleybus: {}, tram: {} } };
     const fDirty = {}, f1 = (x, d = 1) => x.toFixed(d).replace('.', ',');
     const fIn = 'no-spinner w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white text-black text-sm font-semibold tabular-nums border border-appleBorder focus:border-appleBlue focus:outline-none';
     const fPill = c => 'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border ' + c;
@@ -883,7 +1044,7 @@
         <button type="button" data-calc="1" class="px-6 py-2.5 rounded-full bg-appleBlue text-white text-sm font-semibold hover:opacity-90 transition-opacity">Рассчитать парк</button>
         <div id="fFilter" class="relative">
           <button type="button" id="fFBtn" data-toggle="1" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-white border border-appleBorder text-black text-sm font-medium hover:border-appleBlue transition-colors"></button>
-          <div id="fPanel" class="hidden absolute left-0 z-20 mt-2 w-80 max-w-[calc(100vw-3rem)] rounded-2xl bg-white border border-appleBorder shadow-lg p-2"></div>
+          <div id="fPanel" class="hidden absolute left-0 z-20 mt-2 w-96 max-w-[calc(100vw-3rem)] rounded-2xl bg-white border border-appleBorder shadow-lg p-2"></div>
         </div>
         <p id="fMsg" class="text-sm font-medium text-[#C41E14]"></p>
       </div>
@@ -963,6 +1124,13 @@
       else return;
       fleetRender();
     });
+    $('fPanel').addEventListener('input', e => {
+      const t = e.target; if (!t.dataset.cnt) return;
+      e.stopPropagation();
+      const v = Math.floor(parseFloat(t.value)), c = fS.cnt[fS.mode];
+      if (v > 0) c[t.dataset.cnt] = v; else delete c[t.dataset.cnt];
+      fleetRender();
+    });
     document.addEventListener('click', e => {
       let need = false;
       if (fS.open && !e.fKeep) { fS.open = false; need = true; }
@@ -989,9 +1157,14 @@
       eN.classList.toggle('bg-black/[0.06]', lockN); eN.classList.toggle('text-appleMuted', lockN); eN.classList.toggle('cursor-not-allowed', lockN); eN.classList.toggle('bg-white', !lockN); eN.classList.toggle('text-black', !lockN);
       $('fSeg').innerHTML = Object.keys(FM).map(k => `<button type="button" data-mode="${k}" class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${k === fS.mode ? 'bg-white shadow-sm text-appleInk' : 'text-appleMuted hover:text-appleInk'}">${FMN[k]}</button>`).join('');
       const nOn = M.filter(([n]) => !off.has(n)).length, chev = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>';
-      $('fFBtn').innerHTML = `${nOn === M.length ? 'Модели в парке: все (необязательно)' : 'Модели в парке: ' + nOn + ' из ' + M.length} ${chev}`;
+      const cntOf = fS.cnt[fS.mode], lim = n => cntOf[n] > 0 ? Math.floor(cntOf[n]) : Infinity;
+      const onM = M.filter(([n]) => !off.has(n)), limN = onM.filter(([n]) => isFinite(lim(n)));
+      const limTxt = !limN.length ? '' : limN.length === onM.length ? ' · ' + limN.reduce((a, [n]) => a + lim(n), 0) + ' маш.' : ' · есть лимиты';
+      $('fFBtn').innerHTML = `${nOn === M.length ? 'Модели в парке: все' + (limN.length ? '' : ' (необязательно)') : 'Модели в парке: ' + nOn + ' из ' + M.length}${limTxt} ${chev}`;
       $('fPanel').classList.toggle('hidden', !fS.open);
-      $('fPanel').innerHTML = M.slice().sort((x, y) => y[2] - x[2]).map(([n, c, y]) => { const on = !off.has(n); return `<button type="button" data-m="${n}" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left text-sm text-black hover:bg-black/[0.04]"><span class="shrink-0 w-[18px] h-[18px] rounded-md border flex items-center justify-center ${on ? 'bg-appleBlue border-appleBlue text-white' : 'border-appleBorder text-transparent'}"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.5 2.3 2.3L9.5 3.7"/></svg></span><span class="flex-1 font-medium">${n}</span><span class="text-xs text-appleMuted tabular-nums">${c} чел · ${y}</span></button>`; }).join('') + '<div class="flex justify-between px-3 pt-2 mt-1 border-t border-appleBorder text-xs"><button type="button" data-all="all" class="text-appleBlue hover:underline">Все</button><button type="button" data-all="new" class="text-appleBlue hover:underline">Только новее 2015 года</button></div>';
+      const panelHtml = '<div class="flex justify-between gap-2 px-3 pb-1.5 text-[11px] text-appleMuted"><span>Модель</span><span>Машин в парке (пусто — без лимита)</span></div>' + M.slice().sort((x, y) => y[2] - x[2]).map(([n, c, y]) => { const on = !off.has(n), v = cntOf[n] > 0 ? cntOf[n] : ''; return `<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-black/[0.04]"><button type="button" data-m="${n}" class="flex-1 min-w-0 flex items-center gap-3 text-left text-sm text-black"><span class="shrink-0 w-[18px] h-[18px] rounded-md border flex items-center justify-center ${on ? 'bg-appleBlue border-appleBlue text-white' : 'border-appleBorder text-transparent'}"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.5 2.3 2.3L9.5 3.7"/></svg></span><span class="flex-1 font-medium truncate">${n}</span><span class="text-xs text-appleMuted tabular-nums shrink-0">${c} чел · ${y}</span></button><input type="number" min="0" step="1" data-cnt="${n}" value="${v}" placeholder="∞" title="Сколько машин этой модели есть в парке (пусто — без ограничения)" aria-label="Машин в парке: ${n}" class="no-spinner w-14 shrink-0 px-2 py-1 rounded-lg bg-white text-black text-xs font-semibold tabular-nums text-center border border-appleBorder focus:border-appleBlue focus:outline-none"></div>`; }).join('') + '<div class="flex justify-between px-3 pt-2 mt-1 border-t border-appleBorder text-xs"><button type="button" data-all="all" class="text-appleBlue hover:underline">Все</button><button type="button" data-all="new" class="text-appleBlue hover:underline">Только новее 2015 года</button></div>';
+      const ae = document.activeElement;
+      if (!(ae && ae.tagName === 'INPUT' && ae.closest('#fPanel'))) $('fPanel').innerHTML = panelHtml;
 
       const q = {}, out = $('fRes'), nowBox = $('fNowBox'), msg = $('fMsg'); FL.forEach(([k]) => { q[k] = parseFloat($(k).value); });
       const capOf = r => r.m === '*' ? r.c : (M.find(x => x[0] === r.m) || [0, 0])[1];
@@ -1024,9 +1197,9 @@
         out.classList.add('hidden'); out.innerHTML = '';
         return;
       }
-      msg.textContent = '';
+      msg.textContent = (cur.length > 0 && !hasCur) ? 'Чтобы сравнить с нынешним составом, укажите число машин и в пик, и в межпик (оба больше нуля).' : '';
       const sel = M.filter(([n]) => !off.has(n));
-      if (!sel.length) {
+      if (!sel.length && !cur.some(r => M.some(x => x[0] === r.m))) {
         nowBox.classList.add('hidden'); nowBox.innerHTML = '';
         out.classList.remove('hidden');
         out.innerHTML = '<p class="text-xs text-appleMuted">Выберите хотя бы одну модель в фильтре.</p>';
@@ -1052,16 +1225,20 @@
           for (let i = 0; i < c && (co * k < Qm / g - 1e-9 || no * k < fmin - 1e-9); i++) { co += m[1]; no++; used++; }
           if (used > 0) offCounts.set(m[0], used);
         }
+        if (co * k < Qm / g - 1e-9 || no * k < fmin - 1e-9) return null;   // состав должен тянуть и межпик
         const offParts = ord.filter(([m]) => offCounts.has(m[0])).map(([m]) => [m, offCounts.get(m[0])]);
         const pk = Q / ch, of = no > 0 ? Qm / (co * k) : offLoad;
         return { parts: ord, offParts, N, no, y: yy / N, pk, of, S: s1(pk, of), h: T / N, hOff: no > 0 ? T / no : Infinity };
       };
       const better = (a, b) => { const oa = a.S < .25, ob = b.S < .25; if (oa !== ob) return oa; return oa ? (b.y - a.y || a.N - b.N || a.S - b.S) < 0 : (a.S - b.S || b.y - a.y) < 0; };
       const pool = [], one = {};
-      sel.forEach(m => { for (let N = 1; N <= 150; N++) { const r = fleet([[m, N]]); if (r) { pool.push(r); one[m[0]] = N; break; } } });
-      for (let i = 0; i < sel.length; i++) for (let j = i + 1; j < sel.length; j++) {
-        const ni = one[sel[i][0]], nj = one[sel[j][0]]; if (!ni || !nj) continue; let best = null;
-        for (let a = 1; a <= ni; a++) for (let b = 1; b <= nj; b++) { const r = fleet([[sel[i], a], [sel[j], b]]); if (r && (!best || better(r, best))) best = r; }
+      const curM = []; cur.forEach(r => { const f = r.m === '*' ? null : M.find(x => x[0] === r.m); if (f && !curM.includes(f)) curM.push(f); });
+      const cand = sel.slice(); curM.forEach(m => { if (!cand.includes(m)) cand.push(m); });
+      cand.forEach(m => { const mx = Math.min(150, lim(m[0])); for (let N = 1; N <= mx; N++) { const r = fleet([[m, N]]); if (r) { pool.push(r); one[m[0]] = N; break; } } });
+      const ub = m => one[m[0]] || (isFinite(lim(m[0])) ? Math.min(150, lim(m[0])) : 0);
+      for (let i = 0; i < cand.length; i++) for (let j = i + 1; j < cand.length; j++) {
+        const ni = ub(cand[i]), nj = ub(cand[j]); if (!ni || !nj) continue; let best = null;
+        for (let a = 1; a <= ni; a++) for (let b = 1; b <= nj; b++) { const r = fleet([[cand[i], a], [cand[j], b]]); if (r && (!best || better(r, best))) best = r; }
         if (best) pool.push(best);
       }
 
@@ -1074,11 +1251,14 @@
       const bar = v => `<div class="h-1.5 rounded-full bg-black/[0.07] overflow-hidden"><div class="h-full rounded-full" style="width:${Math.min(100, v * 100)}%;background:${v > 1 ? '#FF3B30' : v > .9 ? '#FF9500' : '#34C759'}"></div></div>`;
 
       pool.sort((x, y) => better(x, y) ? -1 : better(y, x) ? 1 : 0);
-      const top = pool.slice(0, 6), best = top[0], okf = r => r.S < .25;
+      const isCurR = r => curM.length > 0 && r.parts.every(([m]) => curM.includes(m));
+      const curBest = hasCur ? pool.find(isCurR) : null;
+      let top = pool.slice(0, 6); const best = top[0], okf = r => r.S < .25;
+      if (curBest && !top.includes(curBest)) top = pool.slice(0, 5).concat(curBest);
       const comp = r => r.parts.map(([m, c]) => `${c} × ${m[0]}`).join(' + ');
       const compOff = r => r.offParts.map(([m, c]) => `${c} × ${m[0]}`).join(' + ');
 
-      let nowIsBest = false;
+      let nowIsBest = false, now = null;
       if (hasCur) {
         let nowY = 0, nowKnownY = 0;
         cur.forEach(r => {
@@ -1088,13 +1268,16 @@
         const nowAvgY = nowKnownY > 0 ? nowY / nowKnownY : 0;
         const nowHPeak = nA > 0 ? T / nA : Infinity;
         const nowHOff = nB > 0 ? T / nB : Infinity;
-        const nowFeasible = nA * k >= fmin - 1e-9 && pkLoad <= g + 1e-9 && offLoad <= g + 1e-9;
-        const now = {
+        const nowFeasible = nA * k >= fmin - 1e-9 && nB * k >= fmin - 1e-9 && pkLoad <= g + 1e-9 && offLoad <= g + 1e-9;
+        now = {
           title: 'Текущий состав на линии',
           sub: cur.map(r => `${r.m === '*' ? 'Другая, ' + r.c + ' чел' : r.m}: ${r.a} в пик / ${r.b} в межпик`).join(' · '),
           N: nA, no: nB, y: nowAvgY, h: nowHPeak, hOff: nowHOff, pk: pkLoad, of: offLoad, S: s1(pkLoad, offLoad),
           feasible: nowFeasible
         };
+        const need = {}; cur.forEach(r => { if (r.m !== '*') need[r.m] = (need[r.m] || 0) + Math.max(r.a, r.b); });
+        const over = Object.keys(need).filter(n => need[n] > lim(n));
+        const limWarn = over.length ? `<div class="text-[11px] font-medium text-[#C41E14]">В парке указано меньше машин, чем выходит на линию: ${over.map(n => `${n} — в парке ${lim(n)}, на линии до ${need[n]}`).join('; ')}</div>` : '';
         const nowIdeal = Math.max(0, Math.round((1 - now.S) * 100));
         const bestIdeal = best ? Math.max(0, Math.round((1 - best.S) * 100)) : -1;
         nowIsBest = now.feasible && (!best || nowIdeal >= bestIdeal);
@@ -1125,6 +1308,7 @@
             </div>
           </div>
           ${nowIsBest ? '<div class="text-[11px] font-medium text-[#248A3D]">Нынешняя конфигурация оптимальна — менять состав не требуется</div>' : ''}
+          ${limWarn}
         </div>`;
       } else {
         nowBox.classList.add('hidden');
@@ -1133,11 +1317,11 @@
 
       if (!pool.length) {
         out.classList.remove('hidden');
-        out.innerHTML = '<p class="text-xs text-appleMuted">Для этих параметров подходящих вариантов не найдено. Проверьте допустимую наполняемость и интервал.</p>';
+        out.innerHTML = '<p class="text-xs text-appleMuted">Для этих параметров подходящих вариантов не найдено. Проверьте допустимую наполняемость и интервал, а если в фильтре заданы лимиты числа машин, возможно, машин в парке не хватает.</p>';
         return;
       }
       const card = (r, rank) => { const [c, w] = tag(r.S), isB = !nowIsBest && rank === 1;
-        const title = comp(r), sub = `${r.parts.length > 1 ? 'Смешанный парк · ' : ''}средний год ${Math.round(r.y)}${r.y >= 2019 ? ' · новый' : ''}`;
+        const title = comp(r), sub = `${hasCur && isCurR(r) ? 'Из нынешнего парка · ' : ''}${r.parts.length > 1 ? 'Смешанный парк · ' : ''}средний год ${Math.round(r.y)}${r.y >= 2019 ? ' · новый' : ''}`;
         return `<div class="rounded-2xl border p-4 space-y-3 ${isB ? 'bg-[#34C759]/[0.07] border-[#34C759]/40' : 'bg-white border-appleBorder'}">
           <div class="flex items-start justify-between gap-2">
             <div class="flex items-start gap-2.5 min-w-0"><span class="shrink-0 w-6 h-6 rounded-full text-[11px] font-semibold flex items-center justify-center ${isB ? 'bg-[#34C759] text-white' : 'bg-black/[0.06] text-appleMuted'}">${rank}</span>
@@ -1161,9 +1345,10 @@
           ? `Текущий состав уже является лучшим (близость к идеалу ${Math.max(0, Math.round((1 - now.S) * 100))}%). Ниже приведены альтернативные варианты для сравнения.`
           : (okf(best) ? `Рекомендуем <b>${comp(best)}</b> (близость к идеалу ${Math.max(0, Math.round((1 - best.S) * 100))}%, сейчас ${Math.max(0, Math.round((1 - now.S) * 100))}%).` : `Ни один вариант не даёт близость к идеалу выше 75%. Ближе всего <b>${comp(best)}</b> (${Math.max(0, Math.round((1 - best.S) * 100))}%, сейчас ${Math.max(0, Math.round((1 - now.S) * 100))}%).`))
         : (okf(best) ? `Рекомендуем <b>${comp(best)}</b> (близость к идеалу ${Math.max(0, Math.round((1 - best.S) * 100))}%).` : `Ни один вариант не даёт близость к идеалу выше 75%. Ближе всего <b>${comp(best)}</b> (${Math.max(0, Math.round((1 - best.S) * 100))}%).`);
-      out.innerHTML = `<p class="text-xs sm:text-[13px] leading-relaxed">Время оборота ${f1(T, 0)} мин, поток около ${f1(Q, 0)} пасс./ч в пик и ${f1(Qm, 0)} пасс./ч в межпик. ${summaryLead}</p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${top.map((r, i) => card(r, i + 1)).join('')}</div>
-        <p class="text-[11px] text-appleMuted">Показано ${top.length} лучших из ${pool.length} вариантов. Сначала идут варианты с близостью к идеалу выше 75%: среди них выше парк с более новым средним годом, затем с меньшим числом машин. Смешанный парк (два типа машин) предлагается, когда он лучше однотипного. В межпик остаются самые новые машины в минимально нужном числе. Год — начало серийного выпуска по открытым источникам (для БКМ 84300М и 32100D приблизительно).</p>`;
+      const curNote = hasCur && curBest && curBest !== best ? ` Из моделей нынешнего парка лучше всего подходит <b>${comp(curBest)}</b> (близость к идеалу ${Math.max(0, Math.round((1 - curBest.S) * 100))}%).` : '';
+      out.innerHTML = `<p class="text-xs sm:text-[13px] leading-relaxed">Время оборота ${f1(T, 0)} мин, поток около ${f1(Q, 0)} пасс./ч в пик и ${f1(Qm, 0)} пасс./ч в межпик. ${summaryLead}${curNote}</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${top.map(r => card(r, pool.indexOf(r) + 1)).join('')}</div>
+        <p class="text-[11px] text-appleMuted">Показано ${top.length} лучших из ${pool.length} вариантов. Сначала идут варианты с близостью к идеалу выше 75%: среди них выше парк с более новым средним годом, затем с меньшим числом машин. Смешанный парк (два типа машин) предлагается, когда он лучше однотипного. Лучший вариант из моделей нынешнего парка показывается всегда, даже если он не вошёл в первую шестёрку. Если в фильтре указано число машин модели, больше этого числа в вариантах не используется. В межпик остаются самые новые машины в минимально нужном числе. Год — начало серийного выпуска по открытым источникам (для БКМ 84300М и 32100D приблизительно).</p>`;
     }
     { const _r = render; render = function () { _r(); fleetRender(); }; }
 
