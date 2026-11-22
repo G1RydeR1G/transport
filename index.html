@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Оценка маршрута городского транспорта</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: {
+        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Display"','"SF Pro Text"','Inter','system-ui','sans-serif'] },
+        colors: { appleBlue:'#0071E3', appleCanvas:'#F5F5F7', appleSurface:'#FFFFFF', appleInk:'#1D1D1F', appleMuted:'#6E6E73', appleBorder:'rgba(0,0,0,0.08)' },
+        boxShadow: { appleCard:'0 4px 20px rgba(0,0,0,0.04)', appleSubtle:'0 1px 3px rgba(0,0,0,0.04)' }
+      } }
+    };
+  </script>
+  <style>
+    input[type="range"].apple-slider{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:9999px;background:#E5E5EA;outline:none;cursor:pointer}
+    input[type="range"].apple-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 2px 6px rgba(0,0,0,.16),0 0 0 1px rgba(0,0,0,.04);cursor:pointer;transition:transform .12s ease}
+    input[type="range"].apple-slider::-webkit-slider-thumb:hover{transform:scale(1.06);box-shadow:0 3px 8px rgba(0,0,0,.2),0 0 0 2px rgba(0,113,227,.25)}
+    input[type="range"].apple-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 2px 6px rgba(0,0,0,.16);cursor:pointer}
+    input[type="number"].no-spinner::-webkit-outer-spin-button,input[type="number"].no-spinner::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+    input[type="number"].no-spinner{-moz-appearance:textfield}
+    .pin{width:26px;height:26px;border-radius:50%;background:#0071E3;color:#fff;font:600 13px/26px -apple-system,sans-serif;text-align:center;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+    .leaflet-container{font-family:inherit}
+    .leaflet-container img,.leaflet-pane img,.leaflet-tile-pane img{max-width:none!important;max-height:none!important;width:auto;height:auto}
+    .leaflet-container .leaflet-tile{max-width:none!important}
+  </style>
+</head>
+<body class="bg-appleCanvas text-appleInk font-sans antialiased min-h-screen selection:bg-appleBlue/15 selection:text-appleBlue">
+  <header class="sticky top-0 z-[1000] bg-white/80 backdrop-blur-xl border-b border-appleBorder">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex flex-col gap-1">
+          <h1 class="text-2xl sm:text-[28px] font-semibold tracking-tight leading-tight">Оценка маршрута городского транспорта</h1>
+          <p class="text-sm sm:text-[15px] text-appleMuted leading-relaxed max-w-3xl">Задайте параметры, постройте трассу на карте — индекс проблем маршрута пересчитается сразу</p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+        <button id="resetBtn" type="button" class="shrink-0 inline-flex items-center justify-center px-4 py-2 rounded-xl text-sm font-medium bg-black/[0.04] hover:bg-black/[0.08] active:scale-[0.99] border border-appleBorder transition-all focus:outline-none focus:ring-2 focus:ring-appleBlue/30">Сбросить</button>
+        </div>
+      </div>
+    </div>
+
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
+    <!-- Карта сверху -->
+    <section class="bg-appleSurface rounded-3xl border border-appleBorder shadow-appleCard p-5 sm:p-7 space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-appleBorder pb-4">
+        <div>
+          <h2 class="text-lg sm:text-xl font-semibold tracking-tight">Трасса маршрута на карте</h2>
+          <p class="text-xs sm:text-sm text-appleMuted mt-1">Нажимайте на карту, чтобы ставить точки по порядку. Точки можно перетаскивать, клик по точке удаляет её.</p>
+        </div>
+        <div class="flex gap-2 shrink-0">
+          <button id="undoBtn" type="button" class="px-4 py-2 rounded-xl text-sm font-medium bg-black/[0.04] hover:bg-black/[0.08] border border-appleBorder transition-all">Отменить точку</button>
+          <button id="clearBtn" type="button" class="px-4 py-2 rounded-xl text-sm font-medium bg-appleBlue text-white hover:bg-[#0077ED] transition-all">Очистить</button>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <div id="cs" class="relative w-full sm:w-auto sm:min-w-[220px]">
+          <button id="csBtn" type="button" class="w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-white border border-appleBorder shadow-appleSubtle hover:border-appleBlue/40 text-sm text-left transition-all focus:outline-none focus:ring-4 focus:ring-appleBlue/15"><span class="flex items-center gap-2 truncate"><svg class="w-4 h-4 shrink-0 text-appleBlue" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.8a5.7 5.7 0 0 0-5.7 5.7c0 4.1 5.7 10.7 5.7 10.7s5.7-6.6 5.7-10.7A5.7 5.7 0 0 0 10 1.8Zm0 7.8a2.1 2.1 0 1 1 0-4.2 2.1 2.1 0 0 1 0 4.2Z"/></svg><span id="csLbl" class="truncate font-medium">Минск</span></span><svg id="csArr" class="w-4 h-4 shrink-0 text-appleMuted transition-transform" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div id="csPanel" class="hidden absolute left-0 mt-2 z-30 w-full sm:w-[280px] bg-white rounded-2xl border border-appleBorder shadow-[0_12px_40px_rgba(0,0,0,0.16)] p-1.5"><div id="csList"></div></div>
+        </div>
+        <button id="loadRoutesBtn" type="button" class="px-4 py-2 rounded-xl text-sm font-medium bg-black/[0.04] hover:bg-black/[0.08] border border-appleBorder transition-all">Загрузить маршруты</button>
+        <div id="rs" class="hidden relative w-full sm:w-auto sm:min-w-[360px]">
+          <button id="rsBtn" type="button" class="w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-white border border-appleBorder shadow-appleSubtle hover:border-appleBlue/40 text-sm text-left transition-all focus:outline-none focus:ring-4 focus:ring-appleBlue/15"><span id="rsLbl" class="truncate text-appleMuted">Выберите маршрут</span><svg id="rsArr" class="w-4 h-4 shrink-0 text-appleMuted transition-transform" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div id="rsPanel" class="hidden absolute left-0 mt-2 z-30 w-full sm:w-[460px] bg-white rounded-2xl border border-appleBorder shadow-[0_12px_40px_rgba(0,0,0,0.16)] overflow-hidden">
+            <div class="p-2.5 space-y-2 border-b border-appleBorder">
+              <input id="rsSearch" type="text" autocomplete="off" placeholder="Поиск по номеру или названию" class="w-full px-3.5 py-2 rounded-xl bg-appleCanvas/80 text-sm border border-appleBorder focus:bg-white focus:border-appleBlue focus:ring-4 focus:ring-appleBlue/15 outline-none transition-all" />
+              <div id="rsTabs" class="flex gap-1 p-1 rounded-xl bg-black/[0.05]"><button type="button" data-t="all" class="flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all">Все</button><button type="button" data-t="bus" class="flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all">Автобус</button><button type="button" data-t="trolleybus" class="flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all">Троллейбус</button><button type="button" data-t="tram" class="flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all">Трамвай</button></div>
+            </div>
+            <div id="rsList" class="max-h-[320px] overflow-y-auto p-1.5"></div>
+          </div>
+        </div>
+        <div id="ds" class="hidden relative w-full sm:w-auto sm:min-w-[300px]">
+          <button id="dsBtn" type="button" class="w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-white border border-appleBorder shadow-appleSubtle hover:border-appleBlue/40 text-sm text-left transition-all focus:outline-none focus:ring-4 focus:ring-appleBlue/15"><span class="truncate"><span class="text-appleMuted">Направление: </span><span id="dsLbl" class="font-medium"></span></span><svg id="dsArr" class="w-4 h-4 shrink-0 text-appleMuted transition-transform" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div id="dsPanel" class="hidden absolute left-0 mt-2 z-30 w-full sm:w-[440px] bg-white rounded-2xl border border-appleBorder shadow-[0_12px_40px_rgba(0,0,0,0.16)] p-1.5"><div id="dsList"></div></div>
+        </div>
+        <button id="covBtn" type="button" class="hidden px-4 py-2 rounded-xl text-sm font-medium bg-black/[0.04] hover:bg-black/[0.08] border border-appleBorder transition-all">Скрыть охват на карте</button>
+        <span id="importStat" class="text-xs sm:text-[13px] text-appleMuted"></span>
+      </div>
+      <div id="mapWarn" class="hidden rounded-2xl bg-[#FF9500]/[0.12] border border-[#FF9500]/25 text-[#B25000] text-xs sm:text-[13px] leading-relaxed p-4">
+        Плитки карты не загрузились, поэтому поле серое. Обычно так бывает, когда страница открыта внутри предпросмотра чата, где внешние картинки заблокированы. Скачайте файл и откройте его двойным кликом в Chrome или Safari. Точки при этом ставятся и считаются и на сером поле, а расчёт K остаётся верным.
+      </div>
+      <div id="map" class="w-full h-[440px] sm:h-[560px] rounded-2xl overflow-hidden border border-appleBorder relative z-0"></div>
+      <p id="mapStat" class="text-xs sm:text-sm text-appleMuted tabular-nums"></p>
+      <p id="covLegend" class="hidden flex items-center gap-2 text-xs sm:text-[13px] text-appleMuted leading-relaxed"><span class="inline-block w-3.5 h-3.5 shrink-0 rounded-full bg-appleBlue/25 border border-appleBlue/30"></span>Синее пятно: зона 400 м вокруг остановок, откуда пассажир дойдёт пешком. Где пятна накладываются, цвет темнее: там трасса дублирует охват.</p>
+    </section>
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <!-- Входные параметры -->
+      <section class="lg:col-span-6 bg-appleSurface rounded-3xl border border-appleBorder shadow-appleCard p-5 sm:p-7 space-y-6">
+        <div class="border-b border-appleBorder pb-4">
+          <h2 class="text-lg sm:text-xl font-semibold tracking-tight">Входные параметры маршрута</h2>
+          <p class="text-xs sm:text-sm text-appleMuted mt-1">Введите значения вручную или переместите ползунки. Извилистость трассы обновляется по точкам на карте.</p>
+        </div>
+
+        <div class="space-y-2">
+          <label for="routeName" class="block text-sm font-medium">Номер или название маршрута</label>
+          <input id="routeName" type="text" maxlength="40" value="" placeholder="Например, Т-1" class="w-full px-3.5 py-2.5 rounded-xl bg-appleCanvas/70 hover:bg-appleCanvas focus:bg-white text-sm sm:text-[15px] placeholder:text-[#9E9EA4] border border-appleBorder focus:border-appleBlue focus:ring-4 focus:ring-appleBlue/15 outline-none transition-all" />
+        </div>
+
+        <div id="sliders" class="space-y-6"></div>
+      </section>
+
+      <!-- Диагностика -->
+      <section class="lg:col-span-6 bg-appleSurface rounded-3xl border border-appleBorder shadow-appleCard p-5 sm:p-7 space-y-6">
+        <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-appleBorder pb-4">
+          <div>
+            <h2 class="text-lg sm:text-xl font-semibold tracking-tight">Диагностика параметров</h2>
+            <p id="summaryLine" class="text-xs sm:text-sm text-appleMuted mt-1 tabular-nums"></p>
+          </div>
+          <span id="routeBadge" class="self-start inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-appleBlue/10 text-appleBlue border border-appleBlue/20 shrink-0"></span>
+        </div>
+
+
+
+        <!-- Профиль загрузки -->
+        <div class="rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 sm:p-5 space-y-4">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="text-sm font-semibold">Профиль загрузки: час пик и межпик</h3>
+            <span class="inline-flex items-center gap-1.5 text-[11px] font-medium text-appleMuted"><span class="inline-block w-0.5 h-3.5 bg-appleInk/70 rounded-full"></span>Ориентир 60%</span>
+          </div>
+          <div class="relative pt-1 pb-1">
+            <div aria-hidden="true" class="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-10"><div class="w-[1.5px] h-full bg-appleInk/45"></div></div>
+            <div class="space-y-3.5 relative z-0">
+              <div class="space-y-1">
+                <div class="flex justify-between text-xs tabular-nums"><span class="font-medium">Час пик (L<sub>пик</sub>)</span><span id="peakLbl" class="font-semibold"></span></div>
+                <div class="w-full h-3 rounded-full bg-black/[0.06] overflow-hidden"><div id="peakBar" class="h-full rounded-full bg-appleBlue transition-all duration-200"></div></div>
+              </div>
+              <div class="space-y-1">
+                <div class="flex justify-between text-xs tabular-nums"><span class="font-medium">Межпик (L<sub>межпик</sub>)</span><span id="offLbl" class="font-semibold"></span></div>
+                <div class="w-full h-3 rounded-full bg-black/[0.06] overflow-hidden"><div id="offBar" class="h-full rounded-full bg-[#5AC8FA] transition-all duration-200"></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="space-y-2 pt-1 border-t border-appleBorder/70">
+            <div class="flex justify-between text-[11px] text-appleMuted tabular-nums"><span>0%</span><span>30%</span><span class="font-medium text-appleInk/80">60%</span><span>90%</span><span>120%</span></div>
+            <p id="loadText" class="text-xs sm:text-[13px] text-appleInk/85 leading-relaxed"></p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 flex flex-col justify-between gap-3">
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold uppercase tracking-wide text-appleMuted">График (D)</span><span id="dPill" class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border"></span></div>
+              <div id="dVal" class="text-xl font-semibold tabular-nums"></div>
+            </div>
+            <p id="dText" class="text-xs text-appleInk/85 leading-relaxed"></p>
+          </div>
+          <div class="rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 flex flex-col justify-between gap-3">
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold uppercase tracking-wide text-appleMuted">Трасса (K)</span><span id="kPill" class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border"></span></div>
+              <div id="kVal" class="text-xl font-semibold tabular-nums"></div>
+            </div>
+            <p id="kText" class="text-xs text-appleInk/85 leading-relaxed"></p>
+          </div>
+        </div>
+
+        <!-- Охват территории -->
+        <div id="covCard" class="hidden rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 sm:p-5 space-y-3">
+          <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold uppercase tracking-wide text-appleMuted">Охват территории (E)</span><span id="covPill" class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border"></span></div>
+          <div class="flex items-end gap-3"><div id="covVal" class="text-xl font-semibold tabular-nums"></div><span id="covSub" class="text-xs text-appleMuted tabular-nums pb-0.5"></span></div>
+          <div class="w-full h-2 rounded-full bg-black/[0.06] overflow-hidden"><div id="covBar" class="h-full rounded-full transition-all duration-200"></div></div>
+          <p id="covText" class="text-xs text-appleInk/85 leading-relaxed"></p>
+        </div>
+
+
+      </section>
+    </div>
+
+    <!-- Итог -->
+    <section class="bg-appleSurface rounded-3xl border border-appleBorder shadow-appleCard p-5 sm:p-7 space-y-6">
+      <div class="border-b border-appleBorder pb-4">
+        <h2 class="text-lg sm:text-xl font-semibold tracking-tight">Итоги</h2>
+        <p class="text-xs sm:text-sm text-appleMuted mt-1">Индекс пересчитывается при любом изменении параметров или трассы на карте.</p>
+      </div>
+      <div id="resGrid" class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <!-- Итоговый индекс -->
+        <div class="rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 sm:p-5 space-y-3">
+          <div class="flex items-end justify-between gap-3">
+            <div>
+              <span class="text-xs font-semibold uppercase tracking-wide text-appleMuted">Индекс проблем маршрута</span>
+              <div id="idxVal" class="text-4xl font-semibold tracking-tight tabular-nums">0%</div>
+            </div>
+            <span id="idxPill" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border"></span>
+          </div>
+          <div class="w-full h-3 rounded-full bg-black/[0.06] overflow-hidden"><div id="idxBar" class="h-full rounded-full transition-all duration-200 ease-out" style="width:0%"></div></div>
+          <p id="idxText" class="text-xs sm:text-[13px] text-appleInk/85 leading-relaxed"></p>
+          <p id="kWarn" class="hidden text-xs sm:text-[13px] leading-relaxed rounded-xl bg-[#FF9500]/[0.12] border border-[#FF9500]/25 text-[#B25000] px-3.5 py-2.5"></p>
+        </div>
+        <div id="recsCard" class="rounded-2xl bg-appleBlue/[0.06] border border-appleBlue/15 p-4 sm:p-5 space-y-3">
+          <h3 class="text-sm font-semibold">Рекомендации</h3>
+          <div id="recs" class="space-y-3"></div>
+        </div>
+      </div>
+    </section>
+    <section id="fleetCard" class="bg-appleSurface rounded-3xl border border-appleBorder shadow-appleCard p-5 sm:p-7 space-y-5"></section>
+  </main>
+
+  <!-- Локальная база маршрутов (создаётся скриптом build_routes.py). Если файла нет, сайт грузит маршруты из OpenStreetMap -->
+  <script src="routes-minsk.js" onerror="console.info('routes-minsk.js не найден: маршруты будут грузиться из OpenStreetMap')"></script>
+  <script>
+  (function () {
+    'use strict';
+    const $ = id => document.getElementById(id);
+    const clip = (x, a, b) => Math.min(Math.max(x, a), b);
+    const f2 = v => Number(v).toFixed(2);
+    // Скрытые настройки формулы: равные веса, ΔL max = 1, K min = 1, K max = 2
+    const W = 1 / 3, DL = 1, KMIN = 1, KMAX = 2, COMFORT = 0.60, SCALE = 1.2;
+    const DEFAULT = { routeName: '', mode: '', peak: 0, off: 0, d: 0, k: 1, kRaw: 1, kBasis: 'manual', cov: null, routeStops: null };
+    const state = { ...DEFAULT };
+    let covShow = true, covDrawn = null;   // показывать ли пятна охвата на карте; какой охват сейчас нарисован
+    // Рисует круги 400 м вокруг остановок. Полупрозрачность показывает дублирование: на перекрытиях цвет темнее
+    function drawCov() {
+      const cv = state.cov, want = cv && covShow ? cv : null;
+      $('covBtn').classList.toggle('hidden', !cv);
+      $('covLegend').classList.toggle('hidden', !want);
+      $('covBtn').textContent = covShow ? 'Скрыть охват на карте' : 'Показать охват на карте';
+      if (want === covDrawn) return;
+      covLayer.clearLayers(); covDrawn = want;
+      if (want) (want.pts || []).forEach(q => L.circle([q.lat, q.lng], { radius: 400, pane: 'cov', stroke: false, fillColor: '#0071E3', fillOpacity: 0.12, interactive: false }).addTo(covLayer));
+    }
+    // Пороги нормы
+    const PR = { under: 0.40, imb: 0.40, dN: 0.10, kN: 1.30, kS: 0.70 };
+
+    // Описание ползунков. Внутри расчёта остаются прежние величины, на экране — проценты
+    const pct = v => Math.round(v * 100) + '%';
+    const kpct = k => Math.round((k - 1) * 100) + '%';   // насколько трасса длиннее кратчайшего пути по улицам
+    const CFG = [
+      { key:'peak', title:'Загрузка в час пик', sym:'L<sub>пик</sub>', min:0, max:120, ticks:['0% (пусто)','60% (ориентир)','120% (сверх нормы)'], hint:'Наполняемость салона в пиковые часы в процентах от номинальной вместимости', to:v=>v*100, from:p=>p/100 },
+      { key:'off',  title:'Загрузка в межпик', sym:'L<sub>межпик</sub>', min:0, max:120, ticks:['0%','60%','120%'], hint:'Средняя наполняемость салона между часами пик, % от вместимости', to:v=>v*100, from:p=>p/100 },
+      { key:'d',    title:'Доля сбоев графика', sym:'D', min:0, max:100, ticks:['0%','50%','100%'], hint:'Доля интервалов, отклонившихся от планового больше допуска', to:v=>v*100, from:p=>p/100 },
+      { key:'k',    title:'Извилистость трассы', sym:'K', min:0, max:100, ticks:['0% (кратчайший путь)','50%','100% (вдвое длиннее)'], hint:'На сколько процентов трасса длиннее кратчайшего пути по улицам между её концами. Считается по маршруту на карте', to:k=>(k-1)*100, from:p=>1+p/100 }
+    ];
+    const numCls = 'no-spinner w-20 px-2.5 py-1.5 rounded-lg bg-appleCanvas/80 focus:bg-white text-right text-sm font-semibold tabular-nums border border-appleBorder focus:border-appleBlue focus:ring-4 focus:ring-appleBlue/15 outline-none transition-all';
+    $('sliders').innerHTML = CFG.map(c => `
+      <div class="pt-1 space-y-2.5">
+        <div class="flex items-center justify-between gap-3">
+          <label for="n_${c.key}" class="text-sm font-medium">${c.title} <span class="font-normal text-appleMuted">(${c.sym})</span></label>
+          <div class="flex items-center gap-1.5"><input id="n_${c.key}" type="number" min="${c.min}" max="${c.max}" step="1" class="${numCls}" /><span class="text-sm font-semibold text-appleMuted">%</span></div>
+        </div>
+        <input id="r_${c.key}" type="range" min="${c.min}" max="${c.max}" step="1" class="apple-slider" aria-label="${c.title}" />
+        <div class="flex justify-between text-[11px] text-appleMuted tabular-nums">${c.ticks.map(t => `<span>${t}</span>`).join('')}</div>
+        <p class="text-xs text-appleMuted">${c.hint}</p>
+      </div>`).join('');
+
+    const shown = c => Math.round(c.to(state[c.key]));
+    function sync() {
+      $('routeName').value = state.routeName;
+      CFG.forEach(c => { $('n_' + c.key).value = shown(c); $('r_' + c.key).value = c.to(state[c.key]); });
+    }
+    CFG.forEach(c => {
+      const n = $('n_' + c.key), r = $('r_' + c.key), lo = c.from(c.min), hi = c.from(c.max);
+      const apply = p => { state[c.key] = clip(c.from(p), lo, hi); if (c.key === 'k') { state.kRaw = state.k; state.kBasis = 'manual'; state.cov = null; } render(); };
+      r.addEventListener('input', () => { apply(parseFloat(r.value)); n.value = shown(c); });
+      n.addEventListener('input', () => { const v = parseFloat(n.value); if (isNaN(v)) return; apply(v); r.value = c.to(state[c.key]); });
+      n.addEventListener('change', () => { n.value = shown(c); });
+    });
+    $('routeName').addEventListener('input', e => { state.routeName = e.target.value; render(); });
+
+    // ---- Диагностика ----
+    const pill = {
+      g: 'bg-[#34C759]/[0.12] text-[#248A3D] border-[#34C759]/25',
+      o: 'bg-[#FF9500]/[0.12] text-[#B25000] border-[#FF9500]/25',
+      r: 'bg-[#FF3B30]/[0.12] text-[#C41E14] border-[#FF3B30]/25',
+      b: 'bg-appleBlue/10 text-appleBlue border-appleBlue/20'
+    };
+    const setPill = (el, cls, text) => { el.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ' + cls; el.textContent = text; };
+
+    function render() {
+      const { peak, off, d, k } = state;
+      // Порог нормы зависит от базы сравнения: от прямой линии трасса естественно длиннее, чем от кратчайшего пути по улицам
+      PR.kN = state.kBasis === 'straight' ? 1.30 : 1.25; PR.kS = state.kBasis === 'straight' ? 0.70 : 0.60;
+      const kBase = state.kBasis === 'straight' ? 'прямой линии между концами' : 'кратчайшего пути по улицам';
+      // Новая формула: три нормированных «штрафа» 0..1, затем взвешенная свёртка с учётом худшего блока
+      const over = clip((peak - 1.0) / 0.30, 0, 1);                 // перегруз в час пик (выше номинала)
+      const under = clip((PR.under - (peak + off) / 2) / PR.under, 0, 1);   // хронически пустой салон
+      const imb = clip((Math.abs(peak - off) - PR.imb) / (1 - PR.imb), 0, 1); // перекос пик/межпик сверх естественного
+      const S1 = 1 - (1 - over) * (1 - under) * (1 - imb);          // блок «загрузка»
+      const S2 = clip((d - PR.dN) / 0.40, 0, 1);                     // блок «регулярность» (10% сбоев — норма)
+      // Блок «геометрия»: штраф за извилистость, сниженный до 60%, если обход действительно открывает новую территорию (охват E)
+      const S3raw = clip((k - PR.kN) / PR.kS, 0, 1);
+      const E = state.cov ? state.cov.E : null;
+      const J = E === null ? 0 : clip((E - 0.5) / 0.3, 0, 1);       // 0 при E ≤ 50% (дублирование), 1 при E ≥ 80%
+      const S3 = S3raw * (1 - 0.6 * J);
+      const mean = 0.4 * S1 + 0.4 * S2 + 0.2 * S3;
+      // Извилистость нередко оправдана охватом жилых районов, поэтому в «худший блок» она входит с весом 0.5:
+      // сама по себе (при нормальных загрузке и регулярности) она не может дать красный результат «Нужна смена маршрута»
+      const G = 0.5 * S3;
+      const healthy = S1 < 0.25 && S2 < 0.25;   // загрузка и регулярность в порядке
+      const I = 0.5 * Math.max(S1, S2, G) + 0.5 * mean;
+      const t1 = S1, t2 = S2, t3 = S3;
+      const names = ['загрузка салона', 'регулярность движения', 'геометрия трассы'];
+      const main = [S1, S2, G].indexOf(Math.max(S1, S2, G));
+      const why = [
+        over >= under && over >= imb ? 'в час пик салон перегружен' : under >= imb ? 'салон в среднем почти пустой' : 'сильный перекос между пиком и межпиком',
+        'много рейсов выбивается из расписания',
+        `трасса заметно длиннее ${kBase}`
+      ][main];
+
+      $('routeBadge').textContent = state.routeName.trim() ? 'Маршрут ' + state.routeName.trim() : '-';
+      $('summaryLine').textContent = `Загрузка: пик ${pct(peak)}, межпик ${pct(off)} · Сбои: ${pct(d)} · Извилистость: ${kpct(k)}`;
+
+      // Индекс и рекомендации
+      const kw = $('kWarn');
+      if ((state.kRaw || k) > 2) { kw.textContent = `Трасса получилась более чем вдвое длиннее ${kBase} (+${Math.round((state.kRaw - 1) * 100)}%). В расчёте индекса учтено не более 100%.`; kw.classList.remove('hidden'); }
+      else kw.classList.add('hidden');
+      const hasData = peak > 0 && off > 0;   // без загрузки в пик и межпик результата нет
+      const bar = $('idxBar'), recs = $('recs');
+      const tag = v => v >= 0.6 ? [pill.r, 'Срочно'] : v >= 0.25 ? [pill.o, 'В плановом порядке'] : [pill.b, 'Желательно'];
+      const rec = (S, title, bullets) => { const [c, t] = tag(S); return `<div class="rounded-xl bg-white border border-appleBorder p-3.5 space-y-2">
+        <div class="flex items-center justify-between gap-2"><span class="text-[13px] font-semibold">${title}</span><span class="shrink-0 inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${c}">${t}</span></div>
+        <ul class="list-disc pl-4 space-y-1 text-xs text-appleInk/85 leading-relaxed">${bullets.map(x => `<li>${x}</li>`).join('')}</ul></div>`; };
+
+      if (!hasData) {
+        $('idxVal').textContent = '—';
+        bar.style.width = '0%';
+        setPill($('idxPill'), 'bg-black/[0.04] text-appleMuted border-appleBorder', 'Нет данных');
+        $('recsCard').classList.remove('hidden'); $('resGrid').classList.add('lg:grid-cols-2');
+        $('idxText').textContent = 'Укажите загрузку в час пик и в межпик (больше нуля), чтобы получить результат.';
+        recs.innerHTML = '<p class="text-xs text-appleMuted leading-relaxed">Рекомендации появятся после ввода загрузки в час пик и в межпик.</p>';
+      } else {
+        $('idxVal').textContent = pct(I);
+        const needRecs = I >= 0.25;   // «изменения не нужны» — рекомендаций нет
+        $('recsCard').classList.toggle('hidden', !needRecs); $('resGrid').classList.toggle('lg:grid-cols-2', needRecs);
+        bar.style.width = I * 100 + '%';
+        if (I < 0.25) { bar.style.background = '#34C759'; setPill($('idxPill'), pill.g, 'Изменения не нужны'); }
+        else if (I < 0.5) { bar.style.background = '#FF9500'; setPill($('idxPill'), pill.o, 'Точечная корректировка'); }
+        else { bar.style.background = '#FF3B30'; setPill($('idxPill'), pill.r, 'Нужна смена маршрута'); }
+        $('idxText').textContent = I < 0.25
+          ? `Все три блока в пределах нормы (загрузка ${pct(S1)}, регулярность ${pct(S2)}, трасса ${pct(S3)}). Маршрут можно оставить без изменений.`
+          : `Главный фактор: ${names[main]} — ${why}. Штрафы блоков: загрузка ${pct(S1)}, регулярность ${pct(S2)}, трасса ${pct(S3)}${J > 0 ? ' (с учётом охвата)' : ''}.`
+            + (main === 2 && healthy && !(E !== null && E < 0.5) ? ' Загрузка и регулярность в норме, поэтому извилистость, скорее всего, оправдана: обход собирает пассажиров из жилых районов. Это повод проверить заезды, а не менять маршрут.' : '');
+
+        const items = [];
+        const avg = (peak + off) / 2, mode = state.mode;
+        const bigVeh = { bus: 'сочленённые автобусы', trolleybus: 'сочленённые троллейбусы', tram: 'вагоны большей вместимости или сдвоенные составы' }[mode] || 'подвижной состав большей вместимости';
+        const smallVeh = { bus: 'автобусы малого класса', trolleybus: 'троллейбусы меньшей вместимости', tram: 'один вагон вместо сдвоенного состава' }[mode] || 'подвижной состав меньшей вместимости';
+        const r1 = v => String(Math.round(v * 10) / 10).replace('.', ',');
+        // Эффект пункта: как изменится индекс, если устранить именно этот фактор
+        const Ieff = (a, b, c) => 0.5 * Math.max(a, b, 0.5 * c) + 0.5 * (0.4 * a + 0.4 * b + 0.2 * c);
+        const comp = { over, under, imb };
+        const s1Without = name => 1 - Object.keys(comp).reduce((p, n) => n === name ? p : p * (1 - comp[n]), 1);
+        const effect = (a, b, c) => { const n = Ieff(a, b, c), dl = Math.round((I - n) * 100); return dl >= 1 ? `<b>Эффект:</b> индекс снизится примерно на ${dl} п. п. (с ${pct(I)} до ${pct(n)}).` : ''; };
+        const withEff = (arr, e) => e ? [...arr, e] : arr;
+
+        if (over > 0.1) {
+          const cap = Math.round((peak / 0.85 - 1) * 100), shorter = Math.round((1 - 0.85 / peak) * 100);
+          items.push([over, `Перегруз в час пик (${pct(peak)})`, withEff([
+            `Чтобы вернуть наполняемость к 85%, нужно поднять провозную способность в пик примерно на ${cap}%. Это интервал короче на ~${shorter}% (например, вместо 6 мин около ${r1(6 * 0.85 / peak)} мин).`,
+            ...(off < 0.5 ? [`Рейсы проще взять из межпика: там загрузка всего ${pct(off)}, и перенос части выпуска в пик не потребует новых машин.`] : []),
+            peak > 1.1
+              ? `Одним ростом числа рейсов не обойтись: при интервале короче 3–4 мин машины начинают идти «пачками» и пассажиры всё равно скапливаются. Нужны ещё и ${bigVeh}.`
+              : `Перегруз небольшой, достаточно добавить рейсы в самые нагруженные 1–2 часа, вместимость менять не нужно.`,
+            'Если переполнен только один участок, а не вся линия, дешевле ввести укороченные рейсы на нём, чем наращивать выпуск по всей трассе.',
+            ...(d > PR.dN ? [`Перегруз удлиняет посадку и сам даёт сбои (сейчас ${pct(d)} интервалов). После разгрузки замерьте регулярность заново: часть сбоев уйдёт сама.`] : [])
+          ], effect(s1Without('over'), S2, S3))]);
+        }
+
+        if (under > 0.1) {
+          const cut = Math.round(clip(1 - avg / 0.5, 0, 0.5) * 100), f = clip(0.5 / off, 1, 2);
+          const lowOnly = peak >= 0.5;   // пик нормальный, пусто только в межпик
+          items.push([under, `Салон почти пустой (средняя загрузка ${pct(avg)})`, withEff(lowOnly ? [
+            `Час пик в порядке (${pct(peak)}), пусто только в межпик (${pct(off)}). Пиковый график не трогайте, а межпиковый интервал увеличьте примерно в ${r1(f)} раза: загрузка поднимется к ~50%.`,
+            `Для межпика достаточно ${smallVeh}: на пиковые рейсы остаётся основной парк.`
+          ] : [
+            `Сократить выпуск примерно на ${cut}% (не больше половины за один шаг), затем повторить замер: загрузка должна подняться к ~50%.`,
+            avg < 0.25
+              ? 'При загрузке ниже 25% дело уже не в интервале, а в востребованности линии. Сверьте остановки с жилой застройкой и пересадочными узлами: возможно, маршрут стоит объединить с параллельным или сократить до загруженного участка.'
+              : `Вместо сокращения числа рейсов можно перейти на ${smallVeh}: интервал сохранится, а затраты упадут.`,
+            ...(k > PR.kN ? [`Обход длиннее ${kBase} на ${kpct(k)} делает поездку дольше, чем нужно, и часть пассажиров выбирает другие маршруты. Спрямление (см. ниже) может вернуть спрос.`] : [])
+          ], effect(s1Without('under'), S2, S3))]);
+        }
+
+        if (imb > 0.1) {
+          const hi = peak >= off, ratio = clip(hi ? peak / off : off / peak, 1, 3);
+          items.push([imb, `Перекос между пиком и межпиком (${pct(peak)} против ${pct(off)})`, withEff(hi ? [
+            `Расписание должно быть двухрежимным: интервалы в пик и межпик примерно как 1 к ${r1(ratio)}. Если сейчас интервал один на весь день, он и даёт такой перекос.`,
+            'Часть межпиковых рейсов лучше выполнять меньшим подвижным составом, а освободившийся парк направить в пик.',
+            `Проверьте, не уходит ли межпиковый спрос на параллельные маршруты: если да, там можно скорректировать интервалы вместо этого.`
+          ] : [
+            `Днём загрузка выше, чем в пик, а для городского маршрута это нетипично. Так бывает у линий к рынкам, больницам и вокзалам. Сначала проверьте замеры.`,
+            'Если данные верны, сдвиньте плотный график с утреннего и вечернего пика на дневные часы.'
+          ], effect(s1Without('imb'), S2, S3))]);
+        }
+
+        if (S2 > 0.1) {
+          const causes = [];
+          if (peak > 1) causes.push('перегруз в час пик (долгая посадка срывает интервалы)');
+          if (k > 1.4) causes.push(`длинная извилистая трасса (+${Math.round((k - 1) * 100)}%): задержки копятся к концу рейса`);
+          const b2 = [`Цель: опустить долю сбоев с ${pct(d)} до нормы 10% и ниже.`];
+          if (causes.length) b2.push('Вероятные причины по вашим же данным: ' + causes.join('; ') + '. Начните с них, иначе расписание будет срываться снова.');
+          if (d < 0.25) b2.push('Ввести диспетчерское удержание на 1–2 контрольных пунктах, чтобы выравнивать интервалы, и заложить на конечной запас на отстой около 10–15% от времени рейса.');
+          else if (d < 0.5) b2.push('Пересчитать время рейса по GPS и брать не среднее, а 85-й процентиль: расписание по среднему заведомо выполняется лишь примерно в половине рейсов.', 'Найти по GPS участки, где теряется больше всего времени, и добиться там приоритета на светофорах или выделенной полосы.');
+          else b2.push('При такой доле сбоев расписание не соответствует реальности: пересчитать время оборота по GPS и перестроить график целиком.', 'Проверить укомплектованность водителями и техническое состояние парка: сход машин с линии даёт такие же симптомы.', 'Если рейс очень длинный, разделить его на два.');
+          items.push([S2, `Нарушение регулярности (сбои у ${Math.round(d * 100)}% интервалов)`, withEff(b2, effect(S1, 0, S3))]);
+        }
+
+        if (S3 > 0.1) {
+          const save = Math.round((k - PR.kN) / k * 100);
+          const cv = state.cov;
+          const covLine = cv
+            ? (E >= 0.8 ? `Охват это подтверждает: трасса почти на всём протяжении открывает новую территорию (E = ${pct(E)}), поэтому штраф за извилистость в индексе уменьшен.`
+              : E >= 0.5 ? `Охват средний (E = ${pct(E)}): часть трассы повторно проходит по уже охваченной территории.`
+              : `Охват низкий (E = ${pct(E)}): трасса петляет по уже охваченной территории, заезды дублируют друг друга, поэтому штраф за извилистость не снижен.`)
+            : '';
+          if (healthy && !(cv && E < 0.5)) {
+            // Загрузка и регулярность в порядке: длинный обход, скорее всего, плата за охват районов
+            const b3 = [
+              `Загрузка (${pct(peak)} в пик, ${pct(off)} в межпик) и регулярность (${pct(d)} сбоев) в норме, значит, обход, вероятнее всего, собирает пассажиров из жилых районов, и спрямлять его не нужно.`,
+              ...(covLine ? [covLine] : []),
+              'Проверьте только отдельные заезды: если на каком-то из них посадка мала, его можно убрать или обслужить реже, а остальную трассу оставить.',
+              state.kBasis === 'straight'
+                ? `Показатель посчитан от прямой линии, а река, железная дорога и промзоны делают прямой путь недостижимым, поэтому он завышен. ${kpct(PR.kN)} лишь условный порог.`
+                : `Показатель посчитан от кратчайшего пути по улицам, поэтому реку и железную дорогу он уже учитывает. ${kpct(PR.kN)} лишь условный порог, а не норма для каждого маршрута.`
+            ];
+            items.push([Math.min(S3, 0.2), `Трасса длиннее ${kBase} на ${Math.round((k - 1) * 100)}%: вероятно, плата за охват`, b3]);
+          } else {
+            const b3 = [`Если довести извилистость до нормы (${kpct(PR.kN)}), трасса станет короче примерно на ${save}%. Время рейса сократится почти настолько же, и тот же интервал можно держать меньшим числом машин.`];
+            if (!healthy) b3.push('Обход оправдан, пока даёт пассажиров. У вас есть другие проблемы (см. выше), поэтому длинный путь с малой загрузкой особенно невыгоден.');
+            if (covLine) b3.push(covLine);
+            if (mode === 'tram') b3.push('Трамвайные пути не спрямить без строительства. Реалистично сохранить трассу и компенсировать её длину скоростью: приоритет на светофорах, выделенное полотно, меньше остановок.');
+            else {
+              b3.push('Найдите на карте петли и заезды (оранжевая линия или ваша трасса) и замерьте посадку на каждом: заезд оправдан, только если даёт заметный пассажиропоток.', 'Оставьте основной коридор по магистрали, а удалённые кварталы свяжите отдельным подвозящим маршрутом.');
+              if (k > 1.5) b3.push('Для такой длины хорошо работает экспресс-вариант с меньшим числом остановок или деление маршрута на два.');
+            }
+            items.push([0.5 * S3, `Извилистая трасса (длиннее ${kBase} на ${Math.round((k - 1) * 100)}%)`, withEff(b3, effect(S1, S2, 0))]);
+          }
+        }
+        items.sort((x, y) => y[0] - x[0]);
+
+        const head = I < 0.25
+          ? 'Срочных действий не требуется. Достаточно мониторинга: повторять замеры раз в квартал.'
+          : I < 0.5
+          ? `Нужна точечная корректировка. Начните с пункта «${items[0] ? items[0][1] : ''}»: он вносит наибольший вклад, остальные выполняйте по мере возможности.`
+          : `Нужен пересмотр маршрута. Действуйте по списку сверху вниз: сначала «${items[0] ? items[0][1] : ''}», затем повторите замеры и пересчитайте индекс.`;
+        recs.innerHTML = `<p class="text-xs text-appleInk/85 leading-relaxed">${head}${items.length > 1 ? ' Эффекты пунктов пересекаются, поэтому складывать их нельзя.' : ''}</p>` + items.map(it => rec(it[0], it[1], it[2])).join('');
+      }
+
+      // Загрузка
+      $('peakLbl').textContent = pct(peak); $('offLbl').textContent = pct(off);
+      const pb = $('peakBar'), ob = $('offBar');
+      pb.style.width = clip(peak / SCALE * 100, 0, 100) + '%';
+      pb.className = 'h-full rounded-full transition-all duration-200 ' + (peak > 1 ? 'bg-[#FF9500]' : peak < 0.35 ? 'bg-[#5AC8FA]' : 'bg-appleBlue');
+      ob.style.width = clip(off / SCALE * 100, 0, 100) + '%';
+      ob.className = 'h-full rounded-full transition-all duration-200 ' + (off >= COMFORT ? 'bg-appleBlue' : off < 0.25 ? 'bg-[#8E8E93]' : 'bg-[#5AC8FA]');
+      const sp = Math.abs(peak - off);
+      const s1 = sp < 0.15 ? `Разброс между пиком и межпиком небольшой (${pct(sp)}) — загрузка ровная.` : sp < 0.35 ? `Перепад между пиком и межпиком умеренный (${pct(sp)}).` : `Заметный перепад между пиком и межпиком (${pct(sp)}): спрос сильно меняется по времени суток.`;
+      const s2 = peak > 1 ? 'В час пик салон перегружен выше номинала.' : peak > COMFORT && off < COMFORT ? 'В час пик нагрузка выше ориентира 60%, а в межпик опускается ниже него.' : peak <= COMFORT && off < 0.3 ? 'Оба значения ниже ориентира — наполняемость невысокая.' : 'Значения сопоставлены с ориентиром комфорта 60%.';
+      $('loadText').textContent = s1 + ' ' + s2;
+
+      // График
+      const pc = Math.round(d * 100);
+      if (d <= 0.15) { setPill($('dPill'), pill.g, 'Стабильный график'); $('dText').textContent = 'Большинство рейсов выполняется близко к расписанию.'; }
+      else if (d <= 0.35) { setPill($('dPill'), pill.o, 'Умеренные сбои'); $('dText').textContent = 'Заметная часть рейсов отклоняется от расписания — возможны регулярные задержки.'; }
+      else { setPill($('dPill'), pill.r, 'Частые сбои'); $('dText').textContent = 'Высокая доля рейсов со сбоями — интервалы и время оборота требуют внимания.'; }
+      $('dVal').textContent = pc + '%';
+
+      // Трасса
+      const kb = state.kBasis, ko = ' Кратчайший путь по улицам посчитать не удалось, поэтому сравнение идёт с прямой линией, и значение завышено.';
+      if (k <= PR.kN) { setPill($('kPill'), pill.g, 'Нормальная трасса'); $('kText').textContent = kb === 'straight' ? 'Трасса не сильно длиннее прямой связи — для городской улично-дорожной сети это обычное значение.' + ko : 'Трасса почти совпадает с кратчайшим путём по улицам: лишних обходов нет.'; }
+      else if (k <= PR.kN + 0.3) { setPill($('kPill'), pill.b, 'Умеренный изгиб'); $('kText').textContent = (kb === 'straight' ? 'Трасса имеет заметные изгибы или заезды к узлам притяжения.' + ko : 'Трасса заметно длиннее кратчайшего пути: есть изгибы или заезды к узлам притяжения.'); }
+      else { setPill($('kPill'), pill.o, 'Сильная извилистость'); $('kText').textContent = 'Протяжённые обходы или сложная конфигурация пути. Оценивайте вместе с охватом и загрузкой: обход оправдан, если открывает новые районы и собирает пассажиров.' + (kb === 'straight' ? ko : ''); }
+      // Охват территории
+      const cc = $('covCard');
+      if (state.cov) {
+        const cv = state.cov;
+        cc.classList.remove('hidden');
+        $('covVal').textContent = pct(cv.E);
+        $('covSub').textContent = `${cv.area.toFixed(1).replace('.', ',')} км² из ${cv.sum.toFixed(1).replace('.', ',')} км² суммарно в радиусе 400 м · ${cv.kind === 'stops' ? cv.n + ' остановок' : cv.n + ' точек трассы через ~500 м'}`;
+        const bar = $('covBar');
+        bar.style.width = clip(cv.E * 100, 0, 100) + '%';
+        if (cv.E >= 0.8) { bar.style.background = '#34C759'; setPill($('covPill'), pill.g, 'Новая территория'); $('covText').textContent = 'Трасса почти на всём протяжении проходит по территории, которую другие её участки не охватывают. ' + (k > PR.kN ? 'Значит, извилистость работает на охват, и штраф за неё в индексе снижен.' : 'Дублирования нет.'); }
+        else if (cv.E >= 0.5) { bar.style.background = '#5AC8FA'; setPill($('covPill'), pill.b, 'Частичный повтор'); $('covText').textContent = 'Часть трассы повторно проходит по уже охваченной территории. ' + (k > PR.kN ? 'Штраф за извилистость снижен лишь частично.' : ''); }
+        else { bar.style.background = '#FF9500'; setPill($('covPill'), pill.o, 'Дублирование'); $('covText').textContent = 'Трасса много петляет по одной и той же территории: заезды перекрывают друг друга. ' + (k > PR.kN ? 'Извилистость охватом не оправдана, штраф не снижен.' : 'Стоит проверить, нужны ли все заезды.'); }
+      } else cc.classList.add('hidden');
+      drawCov();
+      $('kVal').textContent = kpct(k);
+    }
+
+    // ---- Карта (центр задаётся городом) ----
+    const hav = (a, b) => { const R = 6371000, r = Math.PI / 180, dp = (b.lat - a.lat) * r, dl = (b.lng - a.lng) * r;
+      const h = Math.sin(dp / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dl / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+    // Кратчайший путь по улицам между двумя точками (OSRM). null, если сервис недоступен или дороги нет
+    async function shortestPath(A, B) {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
+      try {
+        const url = 'https://router.project-osrm.org/route/v1/driving/' + [A, B].map(p => p.lng.toFixed(6) + ',' + p.lat.toFixed(6)).join(';') + '?overview=false';
+        const j = await (await fetch(url, { signal: ctl.signal })).json();
+        return j.code === 'Ok' && j.routes[0].distance > 1 ? j.routes[0].distance : null;
+      } catch (e) { return null; } finally { clearTimeout(t); }
+    }
+    // Точки вдоль линии через каждые step метров
+    function samplePath(c, step) { const out = [c[0]]; let acc = 0; for (let i = 1; i < c.length; i++) { acc += hav(c[i - 1], c[i]); if (acc >= step) { out.push(c[i]); acc = 0; } } return out; }
+    // Охват: объединение кругов радиуса 400 м (типовая пешая доступность) вокруг остановок. E = площадь объединения / сумма площадей отдельных кругов,
+    // то есть доля «неперекрытой» территории. E около 1 — круги почти не накладываются друг на друга, E < 0.5 — трасса петляет по уже охваченной территории.
+    // От расстояния между остановками E почти не зависит, пока круги не начинают перекрываться (экспресс с редкими остановками получает E ≈ 100%).
+    function coverage(pts, lenM, kind) {
+      if (pts.length < 2 || lenM < 500) return null;
+      const R = 400, cell = 50, r = Math.ceil(R / cell), lat0 = pts.reduce((a, p) => a + p.lat, 0) / pts.length;
+      const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540, set = new Set();
+      pts.forEach(p => {
+        const cx = Math.round(p.lng * kx / cell), cy = Math.round(p.lat * ky / cell);
+        for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) if ((i * i + j * j) * cell * cell <= R * R) set.add((cx + i) + ',' + (cy + j));
+      });
+      const area = set.size * cell * cell / 1e6, sum = pts.length * Math.PI * (R / 1000) ** 2;
+      return { E: Math.min(1, area / sum), area, sum, n: pts.length, kind, pts, lenM };
+    }
+    const map = L.map('map', { attributionControl: false }).setView([53.9006, 27.5590], 12);
+    L.control.attribution({ prefix: false }).addTo(map);
+    const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' });
+    osm.addTo(map);
+    let tilesOk = false;
+    osm.on('tileload', () => { tilesOk = true; $('mapWarn').classList.add('hidden'); });
+    setTimeout(() => { map.invalidateSize(); if (!tilesOk) $('mapWarn').classList.remove('hidden'); }, 4000);
+    setTimeout(() => map.invalidateSize(), 200);
+    window.addEventListener('load', () => map.invalidateSize());
+    let markers = [];
+    $('covBtn').addEventListener('click', () => { covShow = !covShow; drawCov(); });
+    // Трасса, привязанная к дорогам (сплошная) и прямая заготовка на время расчёта (пунктир)
+    const roadLine = L.polyline([], { color: '#0071E3', weight: 5, opacity: .9, lineJoin: 'round' }).addTo(map);
+    const rawLine = L.polyline([], { color: '#0071E3', weight: 3, opacity: .5, dashArray: '6 8' }).addTo(map);
+    map.createPane('cov'); map.getPane('cov').style.zIndex = 350;   // ниже линий трассы (400)
+    const covLayer = L.layerGroup().addTo(map);
+    const imported = L.layerGroup().addTo(map);
+    const icon = i => L.divIcon({ className: '', html: '<div class="pin">' + (i + 1) + '</div>', iconSize: [26, 26], iconAnchor: [13, 13] });
+
+    let seq = 0, timer = null, importedActive = false;
+    const kHint = $('n_k').closest('.pt-1').querySelector('p');
+    const kHintDefault = kHint.textContent;
+    function lockK() {
+      const lock = markers.length > 0 || importedActive;
+      ['n_k', 'r_k'].forEach(id => { $(id).disabled = lock; $(id).classList.toggle('opacity-50', lock); $(id).classList.toggle('cursor-not-allowed', lock); });
+      kHint.textContent = lock ? 'Значение рассчитано по маршруту на карте и заблокировано. Чтобы изменить его вручную, очистите карту.' : kHintDefault;
+    }
+    function setK(K, basis, cov) {
+      state.kBasis = basis || 'manual'; state.cov = cov || null;
+      state.kRaw = K;
+      state.k = Number(clip(K, 1, 2).toFixed(2));
+      $('n_k').value = Math.round((state.k - 1) * 100); $('r_k').value = (state.k - 1) * 100;
+    }
+    function redraw() {
+      markers.forEach((m, i) => m.setIcon(icon(i)));
+      lockK();
+      const P = markers.map(m => m.getLatLng());
+      rawLine.setLatLngs(P);
+      clearTimeout(timer); seq++;
+      if (P.length < 2) {
+        roadLine.setLatLngs([]); state.cov = null;
+        $('mapStat').textContent = `Точек: ${P.length} — поставьте минимум две, чтобы рассчитать K.`;
+        render(); return;
+      }
+      $('mapStat').textContent = `Точек: ${P.length} · строю маршрут по дорогам…`;
+      const my = seq;
+      timer = setTimeout(() => snap(P, my), 300);
+    }
+    async function snap(P, my) {
+      const dir = hav(P[0], P[P.length - 1]);
+      let len = null, coords = null, note = '';
+      try {
+        const url = 'https://router.project-osrm.org/route/v1/driving/' + P.map(p => p.lng.toFixed(6) + ',' + p.lat.toFixed(6)).join(';') + '?overview=full&geometries=geojson';
+        const j = await (await fetch(url)).json();
+        if (my !== seq) return;
+        if (j.code === 'Ok') { len = j.routes[0].distance; coords = j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]); }
+        else note = ' (дорога не найдена, показана прямая)';
+      } catch (e) { if (my !== seq) return; note = ' (сервис маршрутов недоступен, показана прямая)'; }
+      if (len === null) { len = 0; for (let j = 0; j < P.length - 1; j++) len += hav(P[j], P[j + 1]); roadLine.setLatLngs([]); }
+      else { roadLine.setLatLngs(coords); rawLine.setLatLngs([]); }
+      // База сравнения: кратчайший путь по улицам между первой и последней точкой (для двух точек маршрут и есть кратчайший путь)
+      let Ls = null, cov = null;
+      if (coords) {
+        Ls = P.length === 2 ? len : await shortestPath(P[0], P[P.length - 1]);
+        if (my !== seq) return;
+        cov = coverage(samplePath(coords.map(c => ({ lat: c[0], lng: c[1] })), 500), len, 'path');
+      }
+      const basis = Ls ? 'network' : 'straight', base = Ls || dir;
+      if (coords && !Ls) note += ' (кратчайший путь по улицам посчитать не удалось, сравнение с прямой)';
+      const K = base > 1 ? Math.max(1, len / base) : KMAX;
+      setK(K, basis, cov);
+      $('mapStat').textContent = `Точек: ${P.length} · длина по дорогам ${(len / 1000).toFixed(2)} км · ${Ls ? 'кратчайший путь' : 'по прямой'} ${(base / 1000).toFixed(2)} км · извилистость ${Math.round((K - 1) * 100)}%` + (cov ? ` · охват ${Math.round(cov.E * 100)}%` : '') + (K > 2 ? ' (в расчёте не более 100%)' : '') + note;
+      render();
+    }
+    map.on('click', e => {
+      if (importedActive) { imported.clearLayers(); importedActive = false; state.routeStops = null; }
+      const m = L.marker(e.latlng, { draggable: true, icon: icon(markers.length) }).addTo(map);
+      m.on('drag', () => rawLine.setLatLngs(markers.map(x => x.getLatLng())));
+      m.on('dragend', redraw);
+      m.on('click', () => { map.removeLayer(m); markers = markers.filter(x => x !== m); redraw(); });
+      markers.push(m); redraw();
+    });
+    const wipe = () => { state.mode = ''; state.cov = null; state.kBasis = 'manual'; state.routeStops = null; markers.forEach(m => map.removeLayer(m)); markers = []; imported.clearLayers(); importedActive = false; redraw(); };
+    $('undoBtn').onclick = () => { const m = markers.pop(); if (m) map.removeLayer(m); redraw(); };
+    $('clearBtn').onclick = wipe;
+    $('resetBtn').onclick = () => { Object.assign(state, DEFAULT); sync(); $('importStat').textContent = ''; loadSeq++; $('ds').classList.add('hidden'); $('rsLbl').textContent = 'Выберите маршрут'; $('rsLbl').classList.add('text-appleMuted'); wipe(); };
+
+    // ---- Импорт маршрутов Минска из OpenStreetMap (Overpass API) ----
+    // Только зеркала с полными мировыми данными (overpass.osm.ch хранит лишь Швейцарию и для Минска всегда пуст)
+    const OVP = ['https://overpass-api.de/api/interpreter', 'https://lz4.overpass-api.de/api/interpreter', 'https://z.overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.openstreetmap.fr/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+    const CITIES = {
+      minsk: { name: 'Минск', note: 'маршруты из OpenStreetMap', center: [53.9006, 27.5590], zoom: 12, bbox: '53.80,27.35,54.00,27.78', load: true },
+      spb: { name: 'Санкт-Петербург', note: 'список маршрутов пока пуст', center: [59.9343, 30.3351], zoom: 11, bbox: '59.63,29.40,60.12,30.80', load: false }
+    };
+    let city = CITIES.minsk;
+    const TYPES = { bus: ['Автобус', 'А-'], trolleybus: ['Троллейбус', 'Т-'], tram: ['Трамвай', 'Тр-'] };
+    // Ответ годится, если он непустой, без ошибки сервера, а у запроса геометрии есть участки маршрута
+    const good = (q, j) => !!(j && j.elements && j.elements.length)
+      && !(j.remark && /runtime error|timed out|out of memory/i.test(j.remark))
+      && (!/relation\(\d+\)/.test(q) || (j.elements[0].members || []).length > 0);
+    // Старый кэш мог хранить пустые ответы перегруженных серверов — из-за них маршрут «не грузился» неделю
+    try { Object.keys(localStorage).filter(k => k.startsWith('ovp:')).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+    async function overpass(q) {
+      const ck = 'ovp2:' + q;
+      try { const c = JSON.parse(localStorage.getItem(ck) || 'null'); if (c && Date.now() - c.t < 7 * 864e5 && good(q, c.d)) return c.d; } catch (e) {}
+      const data = await overpassNet(q);
+      const save = () => localStorage.setItem(ck, JSON.stringify({ t: Date.now(), d: data }));
+      try { save(); } catch (e) {
+        try { Object.keys(localStorage).filter(k => k.startsWith('ovp2:') && k.includes('out geom')).forEach(k => localStorage.removeItem(k)); save(); } catch (e2) {}
+      }
+      return data;
+    }
+    async function overpassNet(q) {
+      // Зеркала опрашиваются «эстафетой»: первое сразу, каждое следующее через 1.5 с, если ответа ещё нет. Побеждает самый быстрый.
+      let ctls = [], log = [];
+      const host = u => u.replace(/^https?:\/\//, '').split('/')[0];
+      const one = (url, delay) => new Promise((res, rej) => {
+        const ctl = new AbortController(); ctls.push(ctl);
+        let tm = null, kill = null, done = false;
+        const fail = (e, why) => { if (done) return; done = true; clearTimeout(kill); log.push(host(url) + ': ' + why); rej(e); };
+        tm = setTimeout(async () => {
+          kill = setTimeout(() => { fail(new Error('таймаут'), 'таймаут 45 с'); ctl.abort(); }, 45000);
+          try {
+            const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q), signal: ctl.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const txt = await r.text();
+            let j; try { j = JSON.parse(txt); } catch (pe) { throw new Error('ответ не JSON (сервер перегружен)'); }
+            if (!good(q, j)) throw new Error(j && j.remark ? 'ошибка сервера: ' + String(j.remark).slice(0, 60) : 'пустой или неполный ответ');
+            if (!done) { done = true; clearTimeout(kill); res(j); }
+          } catch (e) { fail(e, e.name === 'TypeError' ? 'запрос заблокирован или нет сети' : e.message); }
+        }, delay);
+        ctl.signal.addEventListener('abort', () => { clearTimeout(tm); });
+      });
+      // Три круга с паузой: при перегрузке серверов (429/504) повтор через несколько секунд часто проходит
+      for (let round = 0; round < 3; round++) {
+        ctls = [];
+        if (round) await new Promise(r => setTimeout(r, 3000 * round));
+        try { const j = await Promise.any(OVP.map((u, i) => one(u, i * 1500))); ctls.forEach(c => c.abort()); return j; }
+        catch (e) { ctls.forEach(c => c.abort()); }
+      }
+      const blocked = log.length && log.every(x => /заблокирован/.test(x));
+      throw new Error(blocked
+        ? 'браузер блокирует запросы к внешним серверам. Откройте файл двойным кликом в Chrome или Safari, а не в предпросмотре чата'
+        : 'ни один сервер не ответил. ' + [...new Set(log)].slice(-4).join('; '));
+    }
+    // ---- Список маршрутов (свой выпадающий список) ----
+    let routes = [], rsType = 'all', rsQ = '', rsActive = -1, rsShown = [], loadSeq = 0;
+    const TCLS = { bus: 'bg-[#34C759]/15 text-[#248A3D]', trolleybus: 'bg-appleBlue/10 text-appleBlue', tram: 'bg-[#FF3B30]/[0.12] text-[#C41E14]' };
+    const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const label = e => TYPES[e.tags.route][1] + e.tags.ref;
+    const WORDS = 'Аўтобус|Автобус|Тролейбус|Троллейбус|Трамвай|Bus|Trolleybus|Tram';
+    // Конечные в OSM записаны по-разному («=>», «—», «Автобус №15 — …»): приводим к виду «А → Б»
+    function ends(e) {
+      const t = e.tags, one = x => String(x).replace(/\s+/g, ' ').trim();
+      if (t.from && t.to) return [one(t.from), one(t.to)];
+      const ref = String(t.ref).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const n = one(t.name || '').replace(new RegExp('^(?:' + WORDS + ')\\s*(?:№|#)?\\s*' + ref + '\\s*[:—–-]?\\s*', 'i'), '');
+      const p = n.split(/\s*(?:=>|->|→|⇒|—|–)\s*|\s+-\s+/).map(one).filter(Boolean);
+      return p.length > 1 ? [p[0], p[p.length - 1]] : [p[0] || '', ''];
+    }
+    const dir = e => { const [a, b] = ends(e); return b ? a + ' → ' + b : (a || label(e)); };
+    const desc = g => { const [a, b] = ends(g.items[0]); return b ? a + ' ⇄ ' + b : a; };
+    function setTabs() {
+      $('rsTabs').querySelectorAll('[data-t]').forEach(b => { const on = b.dataset.t === rsType; b.className = 'flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all ' + (on ? 'bg-white shadow-appleSubtle text-appleInk' : 'text-appleMuted hover:text-appleInk'); });
+    }
+    function rsRender() {
+      const q = rsQ.trim().toLowerCase();
+      rsShown = routes.filter(e => (rsType === 'all' || e.tags.route === rsType) && (!q || (label(e) + ' ' + e.items.map(dir).join(' ')).toLowerCase().includes(q)));
+      $('rsList').innerHTML = rsShown.length ? rsShown.map((e, i) => `<button type="button" data-i="${i}" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left text-sm transition-colors ${i === rsActive ? 'bg-appleBlue/10' : 'hover:bg-black/[0.04]'}"><span class="shrink-0 min-w-[56px] text-center px-2 py-0.5 rounded-lg text-xs font-semibold ${TCLS[e.tags.route]}">${esc(label(e))}</span><span class="break-words leading-snug text-appleInk/85">${esc(desc(e)) || '—'}</span></button>`).join('') : `<p class="px-3 py-6 text-center text-xs text-appleMuted">${routes.length ? 'Ничего не найдено' : 'Список маршрутов пока пуст'}</p>`;
+    }
+    function rsOpen(o) {
+      $('rsPanel').classList.toggle('hidden', !o); $('rsArr').style.transform = o ? 'rotate(180deg)' : '';
+      if (o) { setTabs(); rsRender(); $('rsSearch').focus(); }
+    }
+    let dirs = [], dirIdx = 0;
+    const CHECK = '<svg class="w-4 h-4 shrink-0 text-appleBlue" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 10.5l3.5 3.5 7.5-8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    function dsRender() {
+      $('dsList').innerHTML = dirs.map((e, i) => `<button type="button" data-d="${i}" class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left text-sm transition-colors ${i === dirIdx ? 'bg-appleBlue/10' : 'hover:bg-black/[0.04]'}"><span class="break-words leading-snug">${esc(dir(e))}</span>${i === dirIdx ? CHECK : ''}</button>`).join('');
+      $('dsLbl').textContent = dirs.length ? dir(dirs[dirIdx]) : '';
+    }
+    function dsOpen(o) { $('dsPanel').classList.toggle('hidden', !o); $('dsArr').style.transform = o ? 'rotate(180deg)' : ''; if (o) dsRender(); }
+    function pick(g) {
+      $('rsLbl').textContent = label(g) + (desc(g) ? ' · ' + desc(g) : ''); $('rsLbl').classList.remove('text-appleMuted');
+      rsOpen(false); dirs = g.items; dirIdx = 0; $('ds').classList.remove('hidden'); dsRender(); loadRoute(dirs[0]);
+    }
+    $('dsBtn').onclick = () => dsOpen($('dsPanel').classList.contains('hidden'));
+    $('dsList').addEventListener('click', ev => { const b = ev.target.closest('[data-d]'); if (!b) return; dirIdx = +b.dataset.d; dsOpen(false); dsRender(); loadRoute(dirs[dirIdx]); });
+    document.addEventListener('mousedown', ev => { if (!$('ds').contains(ev.target)) dsOpen(false); });
+    $('rsBtn').onclick = () => rsOpen($('rsPanel').classList.contains('hidden'));
+    document.addEventListener('mousedown', ev => { if (!$('rs').contains(ev.target)) rsOpen(false); });
+    $('rsSearch').addEventListener('input', ev => { rsQ = ev.target.value; rsActive = -1; rsRender(); });
+    $('rsSearch').addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') { rsOpen(false); $('rsBtn').focus(); }
+      else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault(); const n = rsShown.length; if (!n) return;
+        rsActive = (rsActive + (ev.key === 'ArrowDown' ? 1 : -1) + n) % n; rsRender();
+        const a = $('rsList').querySelector('[data-i="' + rsActive + '"]'); if (a) a.scrollIntoView({ block: 'nearest' });
+      } else if (ev.key === 'Enter') { ev.preventDefault(); const e = rsShown[Math.max(rsActive, 0)]; if (e) pick(e); }
+    });
+    $('rsList').addEventListener('click', ev => { const b = ev.target.closest('[data-i]'); if (b) pick(rsShown[+b.dataset.i]); });
+    $('rsTabs').addEventListener('click', ev => { const b = ev.target.closest('[data-t]'); if (!b) return; rsType = b.dataset.t; rsActive = -1; setTabs(); rsRender(); });
+
+    // ---- Выбор города ----
+    function csRender() {
+      $('csList').innerHTML = Object.keys(CITIES).map(id => { const c = CITIES[id], on = c === city;
+        return `<button type="button" data-c="${id}" class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${on ? 'bg-appleBlue/10' : 'hover:bg-black/[0.04]'}"><span class="min-w-0"><span class="block text-sm font-medium truncate">${c.name}</span><span class="block text-[11px] text-appleMuted truncate">${c.note}</span></span>${on ? '<svg class="w-4 h-4 shrink-0 text-appleBlue" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 10.5l3.5 3.5 7.5-8" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}</button>`; }).join('');
+    }
+    function csOpen(o) { $('csPanel').classList.toggle('hidden', !o); $('csArr').style.transform = o ? 'rotate(180deg)' : ''; if (o) csRender(); }
+    function setCity(id) {
+      if (CITIES[id] === city) return;
+      city = CITIES[id]; $('csLbl').textContent = city.name;
+      routes = []; rsQ = ''; $('rsSearch').value = ''; rsType = 'all'; rsActive = -1; loadSeq++;
+      rsOpen(false); $('rs').classList.add('hidden'); $('ds').classList.add('hidden'); $('rsLbl').textContent = 'Выберите маршрут'; $('rsLbl').classList.add('text-appleMuted');
+      $('loadRoutesBtn').textContent = 'Загрузить маршруты'; $('importStat').textContent = '';
+      state.routeName = ''; $('routeName').value = ''; setK(1);
+      wipe(); map.setView(city.center, city.zoom); initRoutes();
+    }
+    $('csBtn').onclick = () => csOpen($('csPanel').classList.contains('hidden'));
+    $('csList').addEventListener('click', ev => { const b = ev.target.closest('[data-c]'); if (b) { csOpen(false); setCity(b.dataset.c); } });
+    document.addEventListener('mousedown', ev => { if (!$('cs').contains(ev.target)) csOpen(false); });
+    csRender();
+
+    function buildRoutes(list) {
+      const order = Object.keys(TYPES), groups = new Map(), score = e => (e.tags.from && e.tags.to ? 2 : 0) + (e.tags.name ? 1 : 0);
+      list.forEach(e => {
+        const key = e.tags.route + '|' + String(e.tags.ref).trim().toLowerCase();
+        if (!groups.has(key)) groups.set(key, { tags: { route: e.tags.route, ref: String(e.tags.ref).trim() }, items: [] });
+        groups.get(key).items.push(e);
+      });
+      groups.forEach(g => { const seen = new Set(); g.items = g.items.sort((x, y) => score(y) - score(x)).filter(e => { const k = ends(e)[0] ? dir(e) : 'id' + e.id; if (seen.has(k)) return false; seen.add(k); return true; }); });
+      return [...groups.values()].sort((a, b) => order.indexOf(a.tags.route) - order.indexOf(b.tags.route) || a.tags.ref.localeCompare(b.tags.ref, 'ru', { numeric: true }));
+    }
+    // Список маршрутов города: Минск — по кнопке из OpenStreetMap, город без маршрутов — пустой выпадающий список
+    function initRoutes() {
+      const btn = $('loadRoutesBtn');
+      $('importStat').textContent = '';
+      const id = Object.keys(CITIES).find(k => CITIES[k] === city);
+      const db = window.ROUTES_DB && window.ROUTES_DB[id];
+      if (!city.load) { routes = []; btn.classList.add('hidden'); $('rs').classList.remove('hidden'); }
+      else if (db && db.routes && db.routes.length) {
+        // Локальная база: список и геометрия берутся из файла мгновенно, без обращения к серверам
+        routes = buildRoutes(db.routes); btn.classList.add('hidden'); $('rs').classList.remove('hidden');
+        $('importStat').textContent = `База маршрутов: ${routes.length} (обновлена ${db.built}) · данные © участники OpenStreetMap`;
+      }
+      else { btn.classList.remove('hidden'); btn.textContent = 'Загрузить маршруты'; }
+    }
+    $('loadRoutesBtn').onclick = async () => {
+      const btn = $('loadRoutesBtn'), st = $('importStat');
+      btn.disabled = true; st.textContent = 'Загружаю список маршрутов из OpenStreetMap…';
+      try {
+        const j = await overpass(`[out:json][timeout:60];relation["route"~"^(bus|trolleybus|tram)$"](${city.bbox});out tags;`);
+        const order = Object.keys(TYPES);
+        routes = buildRoutes(j.elements.filter(e => e.tags && e.tags.ref && TYPES[e.tags.route]));
+        $('rs').classList.remove('hidden'); st.textContent = `Найдено маршрутов: ${routes.length}`;
+        btn.textContent = 'Обновить список'; rsOpen(true);
+      } catch (e) { st.textContent = 'Не удалось загрузить список (' + e.message + '). Попробуйте ещё раз позже.'; }
+      btn.disabled = false;
+    };
+
+    // ---- Геометрия маршрута ----
+    const clen = c => { let t = 0; for (let i = 0; i < c.length - 1; i++) t += hav(c[i], c[i + 1]); return t; };
+    // Склеиваем участки ways в непрерывные цепочки (в OSM порядок и направление участков произвольные)
+    function stitch(segs) {
+      const k = q => q.lat.toFixed(6) + ',' + q.lng.toFixed(6);
+      const ends = new Map(), used = new Array(segs.length).fill(false);
+      segs.forEach((sg, i) => [k(sg[0]), k(sg[sg.length - 1])].forEach(key => { if (!ends.has(key)) ends.set(key, []); ends.get(key).push(i); }));
+      const grow = (c, tail) => {
+        for (;;) {
+          const key = k(tail ? c[c.length - 1] : c[0]);
+          const i = (ends.get(key) || []).find(x => !used[x]);
+          if (i === undefined) return c;
+          used[i] = true;
+          const sg = segs[i], first = k(sg[0]) === key;
+          c = tail ? c.concat(first ? sg.slice(1) : sg.slice().reverse().slice(1))
+                   : (first ? sg.slice().reverse().slice(0, -1) : sg.slice(0, -1)).concat(c);
+        }
+      };
+      const out = [];
+      segs.forEach((sg, i) => { if (used[i]) return; used[i] = true; out.push(grow(grow(sg.slice(), true), false)); });
+      return out;
+    }
+    async function loadRoute(e) {
+      const my = ++loadSeq, st = $('importStat'), t0 = Date.now();
+      st.textContent = e.local ? '' : 'Загружаю геометрию маршрута…';
+      const tick = setInterval(() => { if (my !== loadSeq || e.local) clearInterval(tick); else st.textContent = `Загружаю геометрию маршрута… ${Math.round((Date.now() - t0) / 1000)} с`; }, 1000);
+      try {
+        let chains = [], stops = [], len = 0, note = '';
+        if (e.local) {
+          chains = e.c.map(c => c.map(p => ({ lat: p[0], lng: p[1] }))); stops = (e.s || []).map(p => ({ lat: p[0], lng: p[1] })); len = e.L;
+          note = e.fb ? ' · линии трассы в OSM нет, схема построена по остановкам' : chains.length > 1 ? ' · в данных OSM есть разрывы, K посчитан по самой длинной непрерывной части' : '';
+        } else {
+          const j = await overpass(`[out:json][timeout:60];relation(${e.id});out geom;`);
+          if (my !== loadSeq) return;
+          const rel = j.elements && j.elements[0];
+          if (!rel || !rel.members) throw new Error('сервер вернул пустой ответ');
+          const segs = [], seen = new Set();
+          rel.members.forEach(m => {
+            const role = m.role || '';
+            if (m.type === 'way' && m.geometry && !seen.has(m.ref) && !/^(platform|stop)/.test(role)) {
+              const g = m.geometry.filter(Boolean).map(p => ({ lat: p.lat, lng: p.lon }));
+              if (g.length > 1) { seen.add(m.ref); segs.push(g); }
+            } else if (m.type === 'node' && /^stop/.test(role) && m.lat != null) stops.push({ lat: m.lat, lng: m.lon });
+          });
+          if (segs.length) {
+            chains = stitch(segs);
+            const Ls = chains.map(clen), mi = Ls.indexOf(Math.max(...Ls));
+            chains.unshift(chains.splice(mi, 1)[0]); len = Ls[mi];
+            if (chains.length > 1) note = ' · в данных OSM есть разрывы, K посчитан по самой длинной непрерывной части';
+          } else if (stops.length > 1) {
+            chains = [stops.slice()]; len = clen(stops); note = ' · линии трассы в OSM нет, схема построена по остановкам';
+          } else throw new Error('у маршрута нет ни трассы, ни остановок');
+        }
+        if (my !== loadSeq) return;
+        const main = chains[0], lenFull = len;
+        let A = main[0], B = main[main.length - 1], dir = hav(A, B);
+        if (dir < len * 0.25) {   // замкнутая трасса или «туда-обратно»: берём самую удалённую пару точек
+          const sm = main.filter((_, i) => i % Math.ceil(main.length / 300) === 0); let best = 0;
+          for (let i = 0; i < sm.length; i++) for (let q = i + 1; q < sm.length; q++) { const dd = hav(sm[i], sm[q]); if (dd > best) { best = dd; A = sm[i]; B = sm[q]; } }
+          dir = best; len = len / 2;
+        }
+        // База сравнения: кратчайший путь по улицам между концами (для трамвая по рельсам он не считается)
+        const isTram = e.tags && e.tags.route === 'tram';
+        let Ls = null;
+        if (!isTram) { st.textContent = 'Считаю кратчайший путь по улицам…'; Ls = await shortestPath(A, B); if (my !== loadSeq) return; }
+        const basis = Ls ? 'network' : 'straight', base = Ls || dir;
+        const K = base > 1 ? Math.max(1, len / base) : KMAX;
+        const cov = coverage(stops.length >= 3 ? stops : samplePath(main, 500), lenFull, stops.length >= 3 ? 'stops' : 'path');
+        markers.forEach(m => map.removeLayer(m)); markers = []; roadLine.setLatLngs([]); rawLine.setLatLngs([]); clearTimeout(timer); seq++;
+        imported.clearLayers();
+        chains.forEach((c, i) => L.polyline(c, i === 0 ? { color: '#FF9500', weight: 5, opacity: .95 } : { color: '#FF9500', weight: 3, opacity: .4, dashArray: '6 8' }).addTo(imported));
+        stops.forEach(q => L.circleMarker(q, { radius: 3.5, color: '#FF9500', weight: 1.5, fillColor: '#fff', fillOpacity: 1 }).addTo(imported));
+        [[A, 'Начало (для расчёта K)'], [B, 'Конец (для расчёта K)']].forEach(([q, t]) => L.circleMarker(q, { radius: 7, color: '#fff', weight: 2, fillColor: '#1D1D1F', fillOpacity: 1 }).bindTooltip(t).addTo(imported));
+        map.fitBounds(L.latLngBounds(chains.flat()), { padding: [30, 30] });
+        state.routeName = label(e); state.mode = (e.tags && e.tags.route) || ''; state.routeStops = stops.length; $('routeName').value = state.routeName;
+        importedActive = true; lockK(); setK(K, basis, cov); render();
+        $('mapStat').textContent = '';
+        st.textContent = `Длина ${(len / 1000).toFixed(1)} км · ${Ls ? 'кратчайший путь по улицам' : 'по прямой'} ${(base / 1000).toFixed(1)} км · извилистость ${Math.round((K - 1) * 100)}%` + (cov ? ` · охват ${Math.round(cov.E * 100)}%` : '') + (K > 2 ? ' (в расчёте не более 100%)' : '') + (!Ls ? (isTram ? ' · для трамвая кратчайший путь по улицам не считается, сравнение с прямой' : ' · кратчайший путь по улицам посчитать не удалось, сравнение с прямой') : '') + note;
+      } catch (err) { if (my === loadSeq) st.textContent = 'Не удалось загрузить маршрут (' + err.message + '). Выберите его ещё раз — запрос повторится.'; }
+      finally { clearInterval(tick); }
+    }
+
+
+    // ---- Парк и вместимость ----
+    // [модель, вместимость (чел), год начала серийного выпуска, снята с производства]
+    const FM = {
+      bus: [['МАЗ-103',90,1996],['МАЗ-107',150,2001],['МАЗ-203',100,2006],['МАЗ-215',170,2013],['МАЗ-303',105,2019],['БКМ Е321',81,2018],['БКМ Е433',144,2016]],
+      trolleybus: [['МАЗ-203Т',90,2019],['БКМ 32100D',90,2021],['БКМ 43300D',130,2019],['МАЗ-303Т',75,2022],['БКМ 321',115,2003],['БКМ 333',165,1998]],
+      tram: [['БКМ 60102',180,2001,1],['БКМ 84300М',226,2014],['БКМ Т811',159,2022]]
+    };
+    const FMN = { bus: 'Автобусы', trolleybus: 'Троллейбусы', tram: 'Трамваи' };
+    const FL = [['fL','Длина маршрута в одну сторону, км',0,0,100],['fN','Остановок в одном направлении',0,0,80],['fV','Эксплуатационная скорость, км/ч',20,0,60],['fT','Простой на остановке, с',25,0,120],['fTau','Стоянка на конечной, мин (можно 0)',0,0,30,1],['fG','Допустимая наполняемость в пик, % (необязательно)',100,0,130,1],['fH','Максимальный интервал, мин',0,0,60]];
+    const nr = () => ({ m: '', c: 0, a: 0, b: 0 });
+    const fS = { mode: 'bus', user: false, open: false, mOpen: null, calc: false, off: { bus: new Set(), trolleybus: new Set(), tram: new Set() }, rows: { bus: [nr()], trolleybus: [nr()], tram: [nr()] } };
+    const fDirty = {}, f1 = (x, d = 1) => x.toFixed(d).replace('.', ',');
+    const fIn = 'no-spinner w-full mt-1 px-2.5 py-1.5 rounded-lg bg-white text-black text-sm font-semibold tabular-nums border border-appleBorder focus:border-appleBlue focus:outline-none';
+    const fPill = c => 'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border ' + c;
+    $('fleetCard').innerHTML = `
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div><h2 class="text-lg sm:text-xl font-semibold tracking-tight">Парк и вместимость</h2>
+        <p class="text-xs sm:text-sm text-appleMuted mt-1 max-w-xl">Подбор моделей и числа машин, в том числе смешанного парка. Поток пассажиров выводится из загрузки в пик и межпик и из того, какие машины ходят сейчас. Чем новее модель, тем выше она в списке.</p></div>
+        <div id="fSeg" class="inline-flex p-1 rounded-full bg-black/[0.06]"></div>
+      </div>
+      <div class="rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 sm:p-5">
+        <div class="text-xs font-semibold text-appleMuted mb-3">Параметры линии</div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${FL.map(([k, t, v, a, b]) => `<label class="block text-xs text-appleMuted">${t}<input id="${k}" type="number" value="${v}" min="${a}" max="${b}" step="any" class="${fIn}"></label>`).join('')}</div>
+      </div>
+      <div class="rounded-2xl bg-appleCanvas/75 border border-appleBorder p-4 sm:p-5 space-y-3">
+        <div><div class="text-xs font-semibold text-appleMuted">Машины на линии сейчас</div><p class="text-[11px] text-appleMuted mt-0.5">Выберите модели и укажите, сколько машин каждой выходит в час пик и в межпик.</p></div>
+        <div id="fRows" class="space-y-2"></div>
+        <button type="button" data-add="1" class="text-sm text-appleBlue font-medium hover:underline">+ Добавить модель</button>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="button" data-calc="1" class="px-6 py-2.5 rounded-full bg-appleBlue text-white text-sm font-semibold hover:opacity-90 transition-opacity">Рассчитать парк</button>
+        <div id="fFilter" class="relative">
+          <button type="button" id="fFBtn" data-toggle="1" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-white border border-appleBorder text-black text-sm font-medium hover:border-appleBlue transition-colors"></button>
+          <div id="fPanel" class="hidden absolute left-0 z-20 mt-2 w-80 max-w-[calc(100vw-3rem)] rounded-2xl bg-white border border-appleBorder shadow-lg p-2"></div>
+        </div>
+        <p id="fMsg" class="text-sm font-medium text-[#C41E14]"></p>
+      </div>
+      <div id="fNowBox" class="hidden"></div>
+      <div id="fRes" class="hidden space-y-3"></div>`;
+    function rowsRender() {
+      const M = FM[fS.mode];
+      const chev = '<svg class="w-4 h-4 shrink-0 text-appleMuted transition-transform" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      const chk = '<svg class="w-4 h-4 shrink-0 text-appleBlue" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 10.5l3.5 3.5 7.5-8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      $('fRows').innerHTML = fS.rows[fS.mode].map((r, i) => {
+        const found = M.find(x => x[0] === r.m);
+        const lbl = found ? `${found[0]} <span class="text-appleMuted font-normal">· ${found[1]} чел</span>` : r.m === '*' ? 'Другая (указать вместимость)' : '<span class="text-appleMuted font-normal">Выберите модель</span>';
+        const isOpen = fS.mOpen === i;
+        return `<div data-i="${i}" class="flex flex-wrap items-end gap-2">
+        <div class="flex-1 min-w-[210px]">
+          <span class="block text-xs text-appleMuted">Модель</span>
+          <div class="relative mt-1" data-mdrop="${i}">
+            <button type="button" data-k="m" data-mtoggle="${i}" class="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-white text-black text-sm font-semibold border border-appleBorder hover:border-appleBlue/40 focus:border-appleBlue focus:ring-4 focus:ring-appleBlue/15 focus:outline-none transition-all text-left">
+              <span class="truncate">${lbl}</span>
+              <span style="${isOpen ? 'transform:rotate(180deg)' : ''}">${chev}</span>
+            </button>
+            <div class="${isOpen ? '' : 'hidden'} absolute left-0 z-30 mt-1.5 w-full min-w-[260px] rounded-2xl bg-white border border-appleBorder shadow-[0_12px_40px_rgba(0,0,0,0.16)] p-1.5 max-h-64 overflow-y-auto space-y-0.5">
+              ${M.map(([n, c, y]) => {
+                const on = r.m === n;
+                return `<button type="button" data-msel="${n}" class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-sm transition-colors ${on ? 'bg-appleBlue/10 text-black' : 'text-black hover:bg-black/[0.04]'}">
+                  <span class="min-w-0 truncate font-medium">${n}</span>
+                  <span class="flex items-center gap-2 shrink-0">
+                    <span class="px-2 py-0.5 rounded-md bg-black/[0.05] text-[11px] font-medium text-appleMuted tabular-nums">${c} чел</span>
+                    ${on ? chk : ''}
+                  </span>
+                </button>`;
+              }).join('')}
+              <div class="pt-1 mt-1 border-t border-appleBorder">
+                <button type="button" data-msel="*" class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-sm transition-colors ${r.m === '*' ? 'bg-appleBlue/10 text-black' : 'text-black hover:bg-black/[0.04]'}">
+                  <span class="font-medium">Другая (указать вместимость)</span>
+                  ${r.m === '*' ? chk : ''}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <label class="w-28 text-xs text-appleMuted ${r.m === '*' ? '' : 'hidden'}">Вместимость, чел<input data-k="c" type="number" min="0" value="${r.c}" class="${fIn}"></label>
+        <label class="w-24 text-xs text-appleMuted">В пик<input data-k="a" type="number" min="0" step="1" value="${r.a}" class="${fIn}"></label>
+        <label class="w-24 text-xs text-appleMuted">В межпик<input data-k="b" type="number" min="0" step="1" value="${r.b}" class="${fIn}"></label>
+        <button type="button" data-del="${i}" aria-label="Удалить строку" class="mb-0.5 w-8 h-8 rounded-full text-appleMuted hover:bg-black/[0.06] text-lg leading-none">×</button></div>`;
+      }).join('');
+    }
+    $('fRows').addEventListener('input', e => {
+      const t = e.target, row = t.closest('[data-i]'); if (!row || !t.dataset.k) return;
+      const r = fS.rows[fS.mode][+row.dataset.i]; r[t.dataset.k] = t.dataset.k === 'm' ? t.value : (parseFloat(t.value) || 0);
+      if (t.dataset.k === 'm') rowsRender();
+    });
+    $('fleetCard').addEventListener('click', e => {
+      if (e.target.closest('#fFilter')) e.fKeep = true;
+      if (e.target.closest('[data-mdrop]')) e.mKeep = true;
+      const b = e.target.closest('button'); if (!b) return;
+      const off = fS.off[fS.mode], R = fS.rows[fS.mode];
+      if (b.dataset.toggle) { fS.open = !fS.open; fS.mOpen = null; }
+      else if (b.dataset.mtoggle !== undefined) {
+        const idx = +b.dataset.mtoggle;
+        fS.mOpen = fS.mOpen === idx ? null : idx;
+        fS.open = false;
+        rowsRender();
+      }
+      else if (b.dataset.msel !== undefined) {
+        const row = b.closest('[data-i]');
+        R[+row.dataset.i].m = b.dataset.msel;
+        fS.mOpen = null;
+        rowsRender();
+      }
+      else if (b.dataset.mode) { fS.mode = b.dataset.mode; fS.user = true; fS.open = false; fS.mOpen = null; rowsRender(); }
+      else if (b.dataset.m) { off.has(b.dataset.m) ? off.delete(b.dataset.m) : off.add(b.dataset.m); }
+      else if (b.dataset.all) { off.clear(); if (b.dataset.all === 'new') FM[fS.mode].forEach(([n, , y]) => { if (y < 2015) off.add(n); }); }
+      else if (b.dataset.add) { R.push(nr()); fS.mOpen = null; rowsRender(); }
+      else if (b.dataset.del) { R.splice(+b.dataset.del, 1); if (!R.length) R.push(nr()); fS.mOpen = null; rowsRender(); }
+      else if (b.dataset.calc) { fS.calc = true; fS.mOpen = null; }
+      else return;
+      fleetRender();
+    });
+    document.addEventListener('click', e => {
+      let need = false;
+      if (fS.open && !e.fKeep) { fS.open = false; need = true; }
+      if (fS.mOpen !== null && !e.mKeep) { fS.mOpen = null; rowsRender(); need = true; }
+      if (need) fleetRender();
+    });
+    $('fleetCard').addEventListener('input', e => {
+      if (e.isTrusted && e.target.id === 'fN') fDirty.fN = true;
+      if (e.isTrusted && fS.calc) { fS.calc = false; }
+      fleetRender();
+    });
+    rowsRender();
+    function fleetRender() {
+      if (!fS.user && FM[state.mode] && fS.mode !== state.mode) { fS.mode = state.mode; rowsRender(); }
+      const cv = state.cov, M = FM[fS.mode], off = fS.off[fS.mode];
+      const lock = !!(cv && cv.lenM), eL = $('fL'), eN = $('fN');
+      const lockN = !!(importedActive && typeof state.routeStops === 'number' && state.routeStops > 0);
+      if (lock) { eL.value = (cv.lenM / 1000).toFixed(1); }
+      if (lockN) { eN.value = state.routeStops; }
+      else if (lock && !fDirty.fN && cv.kind === 'stops') { eN.value = cv.n; }
+      eL.disabled = lock; eL.title = lock ? 'Длина взята из выбранного маршрута. Чтобы изменить её вручную, очистите маршрут на карте.' : '';
+      eL.classList.toggle('bg-black/[0.06]', lock); eL.classList.toggle('text-appleMuted', lock); eL.classList.toggle('cursor-not-allowed', lock); eL.classList.toggle('bg-white', !lock); eL.classList.toggle('text-black', !lock);
+      eN.disabled = lockN; eN.title = lockN ? 'Число остановок взято из выбранного маршрута. Чтобы изменить вручную, очистите карту или постройте маршрут вручную.' : '';
+      eN.classList.toggle('bg-black/[0.06]', lockN); eN.classList.toggle('text-appleMuted', lockN); eN.classList.toggle('cursor-not-allowed', lockN); eN.classList.toggle('bg-white', !lockN); eN.classList.toggle('text-black', !lockN);
+      $('fSeg').innerHTML = Object.keys(FM).map(k => `<button type="button" data-mode="${k}" class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${k === fS.mode ? 'bg-white shadow-sm text-appleInk' : 'text-appleMuted hover:text-appleInk'}">${FMN[k]}</button>`).join('');
+      const nOn = M.filter(([n]) => !off.has(n)).length, chev = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>';
+      $('fFBtn').innerHTML = `${nOn === M.length ? 'Модели в парке: все (необязательно)' : 'Модели в парке: ' + nOn + ' из ' + M.length} ${chev}`;
+      $('fPanel').classList.toggle('hidden', !fS.open);
+      $('fPanel').innerHTML = M.slice().sort((x, y) => y[2] - x[2]).map(([n, c, y]) => { const on = !off.has(n); return `<button type="button" data-m="${n}" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left text-sm text-black hover:bg-black/[0.04]"><span class="shrink-0 w-[18px] h-[18px] rounded-md border flex items-center justify-center ${on ? 'bg-appleBlue border-appleBlue text-white' : 'border-appleBorder text-transparent'}"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.5 2.3 2.3L9.5 3.7"/></svg></span><span class="flex-1 font-medium">${n}</span><span class="text-xs text-appleMuted tabular-nums">${c} чел · ${y}</span></button>`; }).join('') + '<div class="flex justify-between px-3 pt-2 mt-1 border-t border-appleBorder text-xs"><button type="button" data-all="all" class="text-appleBlue hover:underline">Все</button><button type="button" data-all="new" class="text-appleBlue hover:underline">Только новее 2015 года</button></div>';
+
+      const q = {}, out = $('fRes'), nowBox = $('fNowBox'), msg = $('fMsg'); FL.forEach(([k]) => { q[k] = parseFloat($(k).value); });
+      const capOf = r => r.m === '*' ? r.c : (M.find(x => x[0] === r.m) || [0, 0])[1];
+      const R = fS.rows[fS.mode], cur = R.filter(r => r.m && capOf(r) > 0);
+      const nA = cur.reduce((s, r) => s + r.a, 0), nB = cur.reduce((s, r) => s + r.b, 0);
+      const hasCur = cur.length > 0 && nA > 0 && nB > 0;
+      const hasMap = !!(state.cov && state.cov.lenM) || markers.length >= 2 || (q.fL > 0);
+      const reqKeys = ['fL', 'fN', 'fV', 'fT', 'fH'];
+      const bad = reqKeys.filter(k => !(q[k] > 0));
+      const mk = (el, on) => { el.classList.toggle('border-[#FF3B30]', on); el.classList.toggle('border-appleBorder', !on); if (!el.disabled) { el.classList.toggle('bg-[#FF3B30]/[0.07]', on); el.classList.toggle('bg-white', !on); } };
+      FL.forEach(([k]) => mk($(k), fS.calc && bad.includes(k)));
+      document.querySelectorAll('#fRows [data-i]').forEach((rw, i) => { const r = R[i], f = k => rw.querySelector(`[data-k="${k}"]`);
+        mk(f('m'), false); mk(f('c'), fS.calc && r.m === '*' && (r.a > 0 || r.b > 0) && !(r.c > 0)); mk(f('a'), false); mk(f('b'), false); });
+      if (!fS.calc) {
+        msg.textContent = '';
+        nowBox.classList.add('hidden'); nowBox.innerHTML = '';
+        out.classList.add('hidden'); out.innerHTML = '';
+        return;
+      }
+      if (!hasMap) {
+        if (!$('fL').disabled) mk($('fL'), true);
+        msg.textContent = 'Постройте маршрут на карте или выберите маршрут из списка (нужна длина трассы), а также заполните скорость, простой, стоянку и макс. интервал.';
+        nowBox.classList.add('hidden'); nowBox.innerHTML = '';
+        out.classList.add('hidden'); out.innerHTML = '';
+        return;
+      }
+      if (bad.length) {
+        msg.textContent = 'Заполните обязательные поля, выделенные красным: карту (длину), скорость, простой и макс. интервал (значение должно быть больше нуля).';
+        nowBox.classList.add('hidden'); nowBox.innerHTML = '';
+        out.classList.add('hidden'); out.innerHTML = '';
+        return;
+      }
+      msg.textContent = '';
+      const sel = M.filter(([n]) => !off.has(n));
+      if (!sel.length) {
+        nowBox.classList.add('hidden'); nowBox.innerHTML = '';
+        out.classList.remove('hidden');
+        out.innerHTML = '<p class="text-xs text-appleMuted">Выберите хотя бы одну модель в фильтре.</p>';
+        return;
+      }
+
+      const tau = q.fTau >= 0 ? q.fTau : 0;
+      const T = 2 * (q.fL / q.fV * 60 + q.fN * q.fT / 60) + 2 * tau, k = 60 / T, g = (q.fG > 0 ? q.fG : 100) / 100, fmin = 60 / q.fH;
+      const pkLoad = hasCur && state.peak > 0 ? state.peak : 0.85;
+      const offLoad = hasCur && state.off > 0 ? state.off : 0.50;
+      const baseCapPeak = hasCur ? cur.reduce((s, r) => s + r.a * capOf(r), 0) * k : Math.max(1, Math.ceil(fmin / k)) * 100 * k;
+      const baseCapOff = hasCur ? cur.reduce((s, r) => s + r.b * capOf(r), 0) * k : Math.max(1, Math.ceil(fmin / k)) * 100 * k;
+      const Q = pkLoad * baseCapPeak, Qm = offLoad * baseCapOff;
+      const s1 = (p, o) => 1 - (1 - clip((p - 1) / 0.30, 0, 1)) * (1 - clip((PR.under - (p + o) / 2) / PR.under, 0, 1)) * (1 - clip((Math.abs(p - o) - PR.imb) / (1 - PR.imb), 0, 1));
+      const fleet = parts => {
+        const ord = parts.slice().sort((x, y) => y[0][2] - x[0][2] || y[0][1] - x[0][1]);
+        let N = 0, ch = 0, yy = 0; ord.forEach(([m, c]) => { N += c; ch += c * m[1] * k; yy += c * m[2]; });
+        if (N * k < fmin - 1e-9 || Q / ch > g + 1e-9) return null;
+        let no = 0, co = 0;
+        const offCounts = new Map();
+        for (const [m, c] of ord) {
+          let used = 0;
+          for (let i = 0; i < c && (co * k < Qm / g - 1e-9 || no * k < fmin - 1e-9); i++) { co += m[1]; no++; used++; }
+          if (used > 0) offCounts.set(m[0], used);
+        }
+        const offParts = ord.filter(([m]) => offCounts.has(m[0])).map(([m]) => [m, offCounts.get(m[0])]);
+        const pk = Q / ch, of = no > 0 ? Qm / (co * k) : offLoad;
+        return { parts: ord, offParts, N, no, y: yy / N, pk, of, S: s1(pk, of), h: T / N, hOff: no > 0 ? T / no : Infinity };
+      };
+      const better = (a, b) => { const oa = a.S < .25, ob = b.S < .25; if (oa !== ob) return oa; return oa ? (b.y - a.y || a.N - b.N || a.S - b.S) < 0 : (a.S - b.S || b.y - a.y) < 0; };
+      const pool = [], one = {};
+      sel.forEach(m => { for (let N = 1; N <= 150; N++) { const r = fleet([[m, N]]); if (r) { pool.push(r); one[m[0]] = N; break; } } });
+      for (let i = 0; i < sel.length; i++) for (let j = i + 1; j < sel.length; j++) {
+        const ni = one[sel[i][0]], nj = one[sel[j][0]]; if (!ni || !nj) continue; let best = null;
+        for (let a = 1; a <= ni; a++) for (let b = 1; b <= nj; b++) { const r = fleet([[sel[i], a], [sel[j], b]]); if (r && (!best || better(r, best))) best = r; }
+        if (best) pool.push(best);
+      }
+
+      const tag = S => {
+        const ideal = Math.max(0, Math.round((1 - S) * 100));
+        const cls = S < .25 ? pill.g : S < .5 ? pill.o : pill.r;
+        const word = S < .25 ? 'оптимально' : S < .5 ? 'приемлемо' : 'далеко от идеала';
+        return [cls, `К идеалу: ${ideal}% · ${word}`];
+      };
+      const bar = v => `<div class="h-1.5 rounded-full bg-black/[0.07] overflow-hidden"><div class="h-full rounded-full" style="width:${Math.min(100, v * 100)}%;background:${v > 1 ? '#FF3B30' : v > .9 ? '#FF9500' : '#34C759'}"></div></div>`;
+
+      pool.sort((x, y) => better(x, y) ? -1 : better(y, x) ? 1 : 0);
+      const top = pool.slice(0, 6), best = top[0], okf = r => r.S < .25;
+      const comp = r => r.parts.map(([m, c]) => `${c} × ${m[0]}`).join(' + ');
+      const compOff = r => r.offParts.map(([m, c]) => `${c} × ${m[0]}`).join(' + ');
+
+      let nowIsBest = false;
+      if (hasCur) {
+        let nowY = 0, nowKnownY = 0;
+        cur.forEach(r => {
+          const found = M.find(x => x[0] === r.m);
+          if (found) { nowY += r.a * found[2]; nowKnownY += r.a; }
+        });
+        const nowAvgY = nowKnownY > 0 ? nowY / nowKnownY : 0;
+        const nowHPeak = nA > 0 ? T / nA : Infinity;
+        const nowHOff = nB > 0 ? T / nB : Infinity;
+        const nowFeasible = nA * k >= fmin - 1e-9 && pkLoad <= g + 1e-9 && offLoad <= g + 1e-9;
+        const now = {
+          title: 'Текущий состав на линии',
+          sub: cur.map(r => `${r.m === '*' ? 'Другая, ' + r.c + ' чел' : r.m}: ${r.a} в пик / ${r.b} в межпик`).join(' · '),
+          N: nA, no: nB, y: nowAvgY, h: nowHPeak, hOff: nowHOff, pk: pkLoad, of: offLoad, S: s1(pkLoad, offLoad),
+          feasible: nowFeasible
+        };
+        const nowIdeal = Math.max(0, Math.round((1 - now.S) * 100));
+        const bestIdeal = best ? Math.max(0, Math.round((1 - best.S) * 100)) : -1;
+        nowIsBest = now.feasible && (!best || nowIdeal >= bestIdeal);
+        const [nc, nw] = tag(now.S);
+
+        nowBox.classList.remove('hidden');
+        nowBox.innerHTML = `<div class="rounded-2xl border p-4 sm:p-5 space-y-3 ${nowIsBest ? 'bg-[#34C759]/[0.07] border-[#34C759]/40' : 'bg-appleCanvas/85 border-appleBorder'}">
+          <div class="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b ${nowIsBest ? 'border-[#34C759]/20' : 'border-appleBorder/70'}">
+            <div class="flex items-center gap-2.5">
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${nowIsBest ? 'bg-[#34C759] text-white' : 'bg-black/[0.06] text-appleInk'}">Нынешний</span>
+              <div>
+                <div class="text-sm font-semibold text-black">${now.title}</div>
+                <div class="text-[11px] text-appleMuted">${now.sub}</div>
+              </div>
+            </div>
+            <span class="${fPill(nc)}">${nw}</span>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-6 gap-4 items-center text-xs">
+            <div class="lg:col-span-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div><div class="text-appleMuted">В пик</div><div class="text-base font-semibold text-black tabular-nums">${now.N}</div></div>
+              <div><div class="text-appleMuted">В межпик</div><div class="text-base font-semibold text-black tabular-nums">${now.no}</div></div>
+              <div><div class="text-appleMuted">Интервал в пик</div><div class="text-base font-semibold text-black tabular-nums">${isFinite(now.h) ? f1(now.h) + ' мин' : '—'}</div></div>
+              <div><div class="text-appleMuted">Интервал в межпик</div><div class="text-base font-semibold text-black tabular-nums">${isFinite(now.hOff) ? f1(now.hOff) + ' мин' : '—'}</div></div>
+            </div>
+            <div class="lg:col-span-3 space-y-1.5 text-[11px] text-appleMuted">
+              <div class="flex justify-between"><span>Загрузка в пик</span><span class="tabular-nums">${pct(now.pk)}</span></div>${bar(now.pk)}
+              <div class="flex justify-between"><span>Загрузка в межпик</span><span class="tabular-nums">${pct(now.of)}</span></div>${bar(now.of)}
+            </div>
+          </div>
+          ${nowIsBest ? '<div class="text-[11px] font-medium text-[#248A3D]">Нынешняя конфигурация оптимальна — менять состав не требуется</div>' : ''}
+        </div>`;
+      } else {
+        nowBox.classList.add('hidden');
+        nowBox.innerHTML = '';
+      }
+
+      if (!pool.length) {
+        out.classList.remove('hidden');
+        out.innerHTML = '<p class="text-xs text-appleMuted">Для этих параметров подходящих вариантов не найдено. Проверьте допустимую наполняемость и интервал.</p>';
+        return;
+      }
+      const card = (r, rank) => { const [c, w] = tag(r.S), isB = !nowIsBest && rank === 1;
+        const title = comp(r), sub = `${r.parts.length > 1 ? 'Смешанный парк · ' : ''}средний год ${Math.round(r.y)}${r.y >= 2019 ? ' · новый' : ''}`;
+        return `<div class="rounded-2xl border p-4 space-y-3 ${isB ? 'bg-[#34C759]/[0.07] border-[#34C759]/40' : 'bg-white border-appleBorder'}">
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex items-start gap-2.5 min-w-0"><span class="shrink-0 w-6 h-6 rounded-full text-[11px] font-semibold flex items-center justify-center ${isB ? 'bg-[#34C759] text-white' : 'bg-black/[0.06] text-appleMuted'}">${rank}</span>
+              <div class="min-w-0"><div class="text-sm font-semibold text-black break-words">${title}</div><div class="text-[11px] text-appleMuted break-words">${sub}</div></div></div>
+            <span class="${fPill(c)} shrink-0">${w}</span></div>
+          <div class="rounded-xl bg-black/[0.03] px-3 py-2 space-y-1 text-xs">
+            <div class="flex items-baseline justify-between gap-2"><span class="text-appleMuted shrink-0">В пик (${r.N}):</span><span class="font-medium text-black text-right break-words">${comp(r)}</span></div>
+            <div class="flex items-baseline justify-between gap-2"><span class="text-appleMuted shrink-0">В межпик (${r.no}):</span><span class="font-medium text-black text-right break-words">${compOff(r)}</span></div>
+          </div>
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div><div class="text-appleMuted">В пик</div><div class="text-base font-semibold text-black tabular-nums">${r.N}</div></div>
+            <div><div class="text-appleMuted">В межпик</div><div class="text-base font-semibold text-black tabular-nums">${r.no}</div></div>
+            <div><div class="text-appleMuted">Интервал в пик</div><div class="text-base font-semibold text-black tabular-nums">${isFinite(r.h) ? f1(r.h) + ' мин' : '—'}</div></div>
+            <div><div class="text-appleMuted">Интервал в межпик</div><div class="text-base font-semibold text-black tabular-nums">${isFinite(r.hOff) ? f1(r.hOff) + ' мин' : '—'}</div></div>
+          </div>
+          <div class="space-y-1.5 text-[11px] text-appleMuted"><div class="flex justify-between"><span>Загрузка в пик</span><span class="tabular-nums">${pct(r.pk)}</span></div>${bar(r.pk)}<div class="flex justify-between"><span>Загрузка в межпик</span><span class="tabular-nums">${pct(r.of)}</span></div>${bar(r.of)}</div>
+          ${isB ? '<div class="text-[11px] font-medium text-[#248A3D]">Рекомендуем</div>' : ''}</div>`; };
+      out.classList.remove('hidden');
+      const summaryLead = hasCur
+        ? (nowIsBest
+          ? `Текущий состав уже является лучшим (близость к идеалу ${Math.max(0, Math.round((1 - now.S) * 100))}%). Ниже приведены альтернативные варианты для сравнения.`
+          : (okf(best) ? `Рекомендуем <b>${comp(best)}</b> (близость к идеалу ${Math.max(0, Math.round((1 - best.S) * 100))}%, сейчас ${Math.max(0, Math.round((1 - now.S) * 100))}%).` : `Ни один вариант не даёт близость к идеалу выше 75%. Ближе всего <b>${comp(best)}</b> (${Math.max(0, Math.round((1 - best.S) * 100))}%, сейчас ${Math.max(0, Math.round((1 - now.S) * 100))}%).`))
+        : (okf(best) ? `Рекомендуем <b>${comp(best)}</b> (близость к идеалу ${Math.max(0, Math.round((1 - best.S) * 100))}%).` : `Ни один вариант не даёт близость к идеалу выше 75%. Ближе всего <b>${comp(best)}</b> (${Math.max(0, Math.round((1 - best.S) * 100))}%).`);
+      out.innerHTML = `<p class="text-xs sm:text-[13px] leading-relaxed">Время оборота ${f1(T, 0)} мин, поток около ${f1(Q, 0)} пасс./ч в пик и ${f1(Qm, 0)} пасс./ч в межпик. ${summaryLead}</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${top.map((r, i) => card(r, i + 1)).join('')}</div>
+        <p class="text-[11px] text-appleMuted">Показано ${top.length} лучших из ${pool.length} вариантов. Сначала идут варианты с близостью к идеалу выше 75%: среди них выше парк с более новым средним годом, затем с меньшим числом машин. Смешанный парк (два типа машин) предлагается, когда он лучше однотипного. В межпик остаются самые новые машины в минимально нужном числе. Год — начало серийного выпуска по открытым источникам (для БКМ 84300М и 32100D приблизительно).</p>`;
+    }
+    { const _r = render; render = function () { _r(); fleetRender(); }; }
+
+    initRoutes(); sync(); redraw();
+  })();
+  </script>
+</body>
+</html>
